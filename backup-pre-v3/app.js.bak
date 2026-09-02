@@ -1,0 +1,922 @@
+/* ZD PULSE — Architecture & Design.
+   One file, one router, one fetch helper. Same rail-and-shell flow as Bayut
+   Studios PULSE so the system reads as the one Haroon already signed off. */
+
+const M = location.pathname.replace(/\/[^/]*$/, "") || "";
+const TOK = localStorage.getItem("zd.tok");
+if (!TOK) location.href = M + "/login.html";
+
+let BOOT = null, TAB = "queue", CACHE = {};
+F.M = M; F.TOK = TOK;
+
+const $ = s => document.querySelector(s);
+const el = (h) => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstChild; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const n0 = v => (v == null ? "—" : Number(v).toLocaleString());
+const pkr = v => v == null ? "—" : "PKR " + Number(v).toLocaleString();
+const dash = v => (v == null || v === "" ? "—" : v);
+
+async function api(path, opts) {
+  const r = await fetch(M + path, {
+    ...opts,
+    headers: {"Content-Type": "application/json", "Authorization": "Bearer " + TOK,
+              ...(opts && opts.headers)}
+  });
+  if (r.status === 401) { localStorage.removeItem("zd.tok"); location.href = M + "/login.html"; return; }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(d.error || "Request failed"), d);
+  return d;
+}
+
+/* ── rails ───────────────────────────────────────────────────────────── */
+const IC = {
+  exec:'<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>',
+  matrix:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  project:'<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+  cases:'<path d="M20 13V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7"/><path d="M2 13h20v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z"/><path d="M10 13h4"/>',
+  coord:'<path d="M8 3v4M16 3v4"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 12h6"/><path d="M12 15v6"/>',
+  tasks:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 1.5 1.5L7 5"/><path d="m3 12 1.5 1.5L7 11"/><path d="m3 18 1.5 1.5L7 17"/>',
+  team:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+  oblig:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  catalog:'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+  ledger:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>',
+  people:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  queue:'<path d="M3 6h18M3 12h18M3 18h12"/><circle cx="19.5" cy="18" r="2.2"/>',
+  drawings:'<path d="M3 3h7v7H3zM14 3h7v18h-7zM3 14h7v7H3z"/>',
+  site:'<path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11Z"/><circle cx="12" cy="10" r="2.6"/>',
+  llr:'<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/>',
+};
+const NAV = [
+  {k:"queue",   t:"My Queue",           h:"MY QUEUE"},
+  {k:"exec",    t:"Executive Summary",   h:"EXECUTIVE SUMMARY"},
+  {k:"matrix",  t:"Project Stage Matrix",h:"PROJECT STAGE MATRIX"},
+  {k:"project", t:"Project Insights",    h:"PROJECT INSIGHTS"},
+  {k:"cases",   t:"Approvals Inbox",     h:"APPROVALS INBOX"},
+  {k:"coord",   t:"Coordination Ledger", h:"COORDINATION LEDGER"},
+  {k:"tasks",   t:"Task Management",     h:"TASK MANAGEMENT"},
+  {k:"team",    t:"Team Performance",    h:"TEAM PERFORMANCE"},
+  {k:"oblig",   t:"Obligations",         h:"OBLIGATIONS & COMPLIANCE"},
+  {k:"drawings",t:"Drawings & Issuance",h:"DRAWINGS & ISSUANCE"},
+  {k:"site",    t:"Site & Compliance",   h:"SITE & COMPLIANCE"},
+  {k:"llr",     t:"Lessons & Standards", h:"LESSONS & STANDARDS"},
+  {k:"catalog", t:"Workflow Catalog",    h:"WORKFLOW CATALOG"},
+  {k:"ledger",  t:"Activity Ledger",     h:"ACTIVITY LEDGER"},
+  {k:"people",  t:"People",              h:"PEOPLE"},
+];
+
+function drawRail() {
+  $("#railNav").innerHTML = NAV.map(n =>
+    `<button class="rail-ic ${n.k === TAB ? "is-active" : ""}" data-tab="${n.k}"
+       data-tip="${n.t}" aria-label="${n.t}">
+       <svg viewBox="0 0 24 24">${IC[n.k]}</svg></button>`).join("");
+  $("#railNav").querySelectorAll("[data-tab]").forEach(b =>
+    b.onclick = () => go(b.dataset.tab));
+  railScrollHint();
+}
+
+/* ── rail labels ───────────────────────────────────────────────────────────
+   The label used to be a ::after on the button. At 13 rails the nav did not
+   scroll and nobody noticed; at 15 it does, and `overflow-y:auto` clips on both
+   axes — so a label sitting 52px right of a 64px rail was being cut off at the
+   rail's edge. A pseudo-element cannot leave its scrolling ancestor, so the
+   tooltip is one element on <body>, positioned from the button's rect. One
+   element for the whole rail, delegated, so it also covers the theme, log-out
+   and avatar buttons in the foot. */
+let RAILTIP = null;
+
+function railTip(target) {
+  if (!RAILTIP) {
+    RAILTIP = document.createElement("div");
+    RAILTIP.className = "railtip";
+    RAILTIP.setAttribute("role", "tooltip");
+    document.body.appendChild(RAILTIP);
+  }
+  if (!target) { RAILTIP.classList.remove("on"); return; }
+  const r = target.getBoundingClientRect();
+  /* Align every label to the RAIL's right edge, not the button's, so they line
+     up in one column and always clear the rail — the icon is 40px inside a 64px
+     rail, so measuring from the button leaves the arrow sitting on top of it. */
+  const rail = document.querySelector(".rail").getBoundingClientRect();
+  RAILTIP.textContent = target.dataset.tip;
+  RAILTIP.style.left = (Math.max(r.right, rail.right) + 10) + "px";
+  RAILTIP.style.top = (r.top + r.height / 2) + "px";
+  RAILTIP.classList.add("on");
+}
+
+function railScrollHint() {
+  const n = $("#railNav");
+  if (n) n.classList.toggle("scrolls", n.scrollHeight > n.clientHeight + 1);
+}
+
+(function wireRail() {
+  const rail = document.querySelector(".rail");
+  if (!rail) return;
+  rail.addEventListener("pointerover", ev => {
+    const t = ev.target.closest("[data-tip]");
+    railTip(t && rail.contains(t) ? t : null);
+  });
+  /* a label must not outlive the pointer, the scroll, or the click */
+  rail.addEventListener("pointerleave", () => railTip(null));
+  rail.addEventListener("click", () => railTip(null));
+  const nav = $("#railNav");
+  if (nav) nav.addEventListener("scroll", () => { railTip(null); railScrollHint(); });
+  window.addEventListener("resize", railScrollHint);
+})();
+
+function go(k) {
+  TAB = k; drawRail();
+  if (location.hash !== "#/" + k) history.replaceState(null, "", "#/" + k);
+  render();
+}
+
+/* Deep links. #/tasks opens a rail, #/e/case/13 opens a record — so a finding can
+   be sent to someone as a URL instead of "go to approvals and scroll". */
+function fromHash() {
+  const h = (location.hash || "").replace(/^#\/?/, "").split("/");
+  if (h[0] === "e" && h[1] && h[2]) { E.open(h[1], +h[2]); return NAV.some(n => n.k === TAB) ? TAB : "queue"; }
+  return NAV.some(n => n.k === h[0]) ? h[0] : "queue";
+}
+window.addEventListener("hashchange", () => {
+  const h = (location.hash || "").replace(/^#\/?/, "").split("/");
+  if (h[0] === "e" && h[1] && h[2]) return E.open(h[1], +h[2]);
+  if (NAV.some(n => n.k === h[0]) && h[0] !== TAB) { TAB = h[0]; drawRail(); render(); }
+});
+
+/* ── shared bits ─────────────────────────────────────────────────────── */
+const clockBar = (own, wait) => {
+  const t = (own || 0) + (wait || 0) || 1;
+  return `<div class="clock"><i class="own" style="width:${own / t * 100}%"></i>
+          <i class="wait" style="width:${wait / t * 100}%"></i></div>`;
+};
+const projOpts = (sel) => BOOT.projects.map(x =>
+  [x.id, x.name + (x.is_bau ? " (BAU)" : "")]);
+const peopleOpts = (team) => [["", "— unassigned —"]].concat(
+  BOOT.people.filter(p => !team || p.team === team).map(p => [p.id, `${p.name} · ${p.designation}`]));
+const refresh = (msg) => { CACHE.matrix = null; CACHE.cat = null;
+  if (msg) F.toast(msg); render(); };
+
+const CLOCK_LEGEND = `<div class="legend">
+  <span><b style="background:var(--st-run)"></b>Own time — the clock while Arch &amp; Design held it</span>
+  <span><b style="background:var(--st-wait)"></b>Wait time — held by someone outside the department</span></div>`;
+
+const stChip = s => ({
+  done:'<span class="chip c-done">Done</span>',
+  running:'<span class="chip c-run">Running</span>',
+  waiting:'<span class="chip c-wait">Waiting</span>',
+  queued:'<span class="chip c-queue">Queued</span>',
+  hold:'<span class="chip c-hold">Hold</span>',
+}[s] || `<span class="chip c-queue">${esc(s)}</span>`);
+
+/* ── 1 · executive ───────────────────────────────────────────────────── */
+function vExec() {
+  const k = BOOT.kpi, cs = BOOT.catalog_stats;
+  const p = $("#page");
+  p.innerHTML = `
+  <div class="note"><b>Everything on this screen is live and every row opens.</b>
+    The catalog, the spine, the routes and their sources, the PKR thresholds, the TAT
+    conflicts, the people and the project names are transcribed from Design Workflow
+    Booklet Vol.1 and the Guidelines Manual. Where a project sits on the spine, and the
+    register history behind it, is seeded operating history so every surface has something
+    to act on — it is generated FROM the stage each project has reached, so the registers
+    and the spine can never disagree. Four of the twelve on-ground projects are not named
+    in any document supplied and were not invented.</div>
+
+  <div class="grid g4">
+    <div class="card dark">
+      <div class="k-lbl">Wait time booked outside the department</div>
+      <div class="k-val">${n0(k.wait_days)}<span class="u">days</span></div>
+      <div class="k-note">${k.wait_share}% of all elapsed time on Arch &amp; Design work was
+        spent waiting on PM, Supply Chain, Finance, the Authority, vendors or stakeholders.
+        <b>This is the number nobody can produce today.</b></div>
+    </div>
+    <div class="card clickcard" data-goto="matrix">
+      <div class="k-lbl">Stages running late</div>
+      <div class="k-val" style="color:${k.stages_late ? "var(--bad)" : "var(--good)"}">${k.stages_late}</div>
+      <div class="k-note">Past planned end and still open, across ${k.projects} projects ×
+        ${BOOT.stages.length} stations.</div>
+    </div>
+    <div class="card clickcard" data-goto="cases">
+      <div class="k-lbl">Awaiting a decision</div>
+      <div class="k-val">${k.open_cases}</div>
+      <div class="k-note"><b>${k.cases_at_zd}</b> sit with Arch &amp; Design ·
+        <b>${k.cases_stuck}</b> sit with a department that has no system yet.</div>
+    </div>
+    <div class="card clickcard" data-goto="oblig">
+      <div class="k-lbl">Obligations missed</div>
+      <div class="k-val" style="color:${k.oblig_missed ? "var(--bad)" : "var(--good)"}">${k.oblig_missed}</div>
+      <div class="k-note">Weekly reviews, site visits and compliance reports past due —
+        Manual §9 and §15.</div>
+    </div>
+  </div>
+
+  <div class="sec"><h2>Where the department's time actually goes</h2>
+    <p>Own time versus wait time, the split captured at every handoff.</p></div>
+  <div class="card">
+    ${clockBar(k.own_days, k.wait_days)}
+    <div style="display:flex;justify-content:space-between;margin-top:9px;font-size:12px">
+      <span><b>${n0(k.own_days)}d</b> own</span>
+      <span><b>${n0(k.wait_days)}d</b> waiting on others</span></div>
+    ${CLOCK_LEGEND}
+  </div>
+
+  <div class="sec"><h2>The construction years</h2>
+    <p>Stage 13 used to be one label covering everything from an RFI to a handover.
+      These are the Manual sections that now have a surface, a clock and a gate.</p></div>
+  <div class="grid g4">
+    <div class="card clickcard" data-goto="drawings">
+      <div class="k-lbl">Sheets on the register</div>
+      <div class="k-val sm">${n0(k.drawings)}</div>
+      <div class="k-note"><b>${n0(k.sheets_issued)}</b> sheet-issuances recorded — which
+        drawing, at which revision, to whom. §5.</div></div>
+    <div class="card clickcard" data-goto="site">
+      <div class="k-lbl">NCRs open</div>
+      <div class="k-val sm" style="color:${k.ncr_open ? "var(--bad)" : "var(--good)"}">${k.ncr_open}</div>
+      <div class="k-note">Raised by a site visit that found non-compliance. §15 → §16.</div></div>
+    <div class="card clickcard" data-goto="site">
+      <div class="k-lbl">Days with the Authority</div>
+      <div class="k-val sm" style="color:var(--st-wait)">${n0(Math.round(k.authority_days))}</div>
+      <div class="k-note">${k.authority_open} submissions and inspections open. §7 / §17.</div></div>
+    <div class="card clickcard" data-goto="llr">
+      <div class="k-lbl">Lessons adopted into the standard</div>
+      <div class="k-val sm">${k.lessons_adopted}<span class="u">/ ${k.lessons_adopted + k.lessons_open}</span></div>
+      <div class="k-note">${k.template_items} checks now live on the §4.2 template —
+        the annexure the Manual marks “(to be added)”.</div></div>
+  </div>
+
+  <div class="sec"><h2>Open cross-team asks</h2>
+    <p>Who owes Arch &amp; Design what, and for how long.</p></div>
+  <div class="grid g4">
+    <div class="card clickcard" data-goto="coord"><div class="k-lbl">Open asks</div>
+      <div class="k-val sm">${k.coord_open}</div></div>
+    <div class="card clickcard" data-goto="coord"><div class="k-lbl">Past their own SLA</div>
+      <div class="k-val sm" style="color:${k.coord_over ? "var(--bad)" : "var(--good)"}">${k.coord_over}</div></div>
+    <div class="card clickcard" data-goto="ledger"><div class="k-lbl">Blocked attempts logged</div>
+      <div class="k-val sm" style="color:var(--st-wait)">${n0(k.blocked)}</div>
+      <div class="k-note">Gate refusals and external-lane blocks. The count that justifies
+        building the other departments' systems.</div></div>
+    <div class="card clickcard" data-goto="catalog"><div class="k-lbl">Catalog loaded</div>
+      <div class="k-val sm">${cs.workflows}<span class="u">workflows</span></div>
+      <div class="k-note">${cs.from_booklet} from the booklet + <b>${cs.from_manual} from the
+        Manual</b> · ${cs.steps} steps · ${cs.gates} gates</div></div>
+  </div>
+
+  ${BOOT.conflicts.length ? `
+  <div class="sec"><h2>Blocking the SLA baseline</h2>
+    <p>The booklet and the Guidelines Manual publish different overall TATs.</p></div>
+  <div class="note warn">
+    <b>${BOOT.conflicts.length} of 10 architecture stages carry two different published TATs.</b>
+    Until Ahmed rules on which document is canonical, no SLA figure in this system can be
+    defended. Both are stored; the Workflow Catalog rail lists every conflict, and each is
+    already on the lessons register awaiting a ruling.
+  </div>` : ""}
+
+  <div class="sec"><h2>Still not answered</h2><p>Carried from the document review.
+    Each of these is on the lessons register, so it has a status rather than living in
+    a slide.</p></div>
+  <div class="card"><table class="tbl">
+    <tr class="rc" data-goto="llr"><td><b>TAT authority</b></td><td class="mut">Booklet vs Manual — 6 stages disagree, Manual disagrees with its own flowcharts on 3</td></tr>
+    <tr><td><b>Working or calendar days?</b></td><td class="mut">No document states it. This build assumes working days, Mon–Fri.</td></tr>
+    <tr><td><b>Creative scope</b></td><td class="mut">7 of 12 workflows have no project to attach to — parked on a "Department BAU" carrier</td></tr>
+    <tr class="rc" data-goto="catalog"><td><b>${cs.unknown_tat} steps carry no duration</b></td><td class="mut">Topographical Survey and Structural Stability Ownership have a blank column in the booklet</td></tr>
+    <tr><td><b>4 projects unnamed</b></td><td class="mut">Booklet says 12 on-ground; 8 are named on the cover. The rest were not invented.</td></tr>
+    <tr class="rc" data-goto="llr"><td><b>MAR means three things</b></td><td class="mut">Design §11 / PM §5.3 / Supply Chain §4.2 — different scopes, different approval chains</td></tr>
+  </table></div>`;
+}
+
+/* ── 2 · stage matrix ────────────────────────────────────────────────── */
+async function vMatrix() {
+  const d = CACHE.matrix || (CACHE.matrix = await api("/api/matrix"));
+  const p = $("#page");
+  const hdr = d.stages.map(s =>
+    `<th title="${esc(s.name)}">${s.stage}<br><span style="font-weight:600">${esc(s.name.split(" ")[0])}</span></th>`).join("");
+  const rows = d.rows.map(r => `<tr>
+    <td class="pj" style="cursor:pointer" data-e="project:${r.project.id}">${esc(r.project.name)}<small>${esc(r.project.kind)} · ${esc(r.project.city)}</small></td>
+    ${r.cells.map(c => {
+      const cls = c.overdue ? "s-overdue" : "s-" + c.status;
+      const lbl = c.status === "done" ? "✓" :
+                  c.status === "running" ? (c.n ? Math.round(c.done / c.n * 100) + "%" : "•") :
+                  c.status === "hold" ? "⏸" : "";
+      const sub = c.wait ? `${c.wait}d wait` : (c.own ? `${c.own}d` : "");
+      return `<td><div class="cell ${cls}" data-p="${r.project.id}"
+        title="${esc(r.project.name)} — ${esc(c.name)}\n${c.done}/${c.n} steps · own ${c.own}d · wait ${c.wait}d">
+        <b>${lbl}</b><i>${sub}</i></div></td>`;
+    }).join("")}</tr>`).join("");
+
+  p.innerHTML = `
+  <div class="actbar"><button class="btn pri" id="mNew">+ Open a project</button></div>
+  <div class="note">Every project against all ${d.stages.length} stations of the spine —
+    acquisition, the ten design stages, construction support, and <b>closeout</b>.
+    Station 14 is new: before it, stage 13 ran forever and a project could never be
+    finished. <b>This replaces the master sheet.</b>
+    A cell shows completion and, where it matters more, how many days it spent waiting on
+    someone outside the department.</div>
+  <div class="phase-band">
+    <span style="flex:2">◀ Acquisition</span><span style="flex:10">Design ▶</span>
+    <span style="flex:1">Support</span></div>
+  <div class="card mx"><table>
+    <thead><tr><th class="pj">Project</th>${hdr}</tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  <div class="legend">
+    <span><b style="background:var(--st-done-t)"></b>Done</span>
+    <span><b style="background:var(--st-run-t);border:1px solid var(--st-run)"></b>Running</span>
+    <span><b style="background:var(--st-late-t);border:1px solid var(--st-late)"></b>Overdue</span>
+    <span><b style="background:var(--card-3)"></b>Not started</span></div>`;
+  $("#mNew").onclick = () => UI.newProject();
+  p.querySelectorAll(".cell").forEach(c => c.onclick = () => {
+    CACHE.pid = +c.dataset.p; go("project");
+  });
+}
+
+/* ── 3 · project insights ────────────────────────────────────────────── */
+async function vProject() {
+  const pid = CACHE.pid || BOOT.projects.find(x => !x.is_bau).id;
+  CACHE.pid = pid;
+  const d = await api("/api/project/" + pid);
+  const p = $("#page");
+  const opts = BOOT.projects.map(x =>
+    `<option value="${x.id}" ${x.id === pid ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+  const own = Object.values(d.by_team).reduce((a, b) => a + b.own, 0);
+  const wait = Object.values(d.by_team).reduce((a, b) => a + b.wait, 0);
+
+  p.innerHTML = `
+  <div class="actbar">
+    <select class="btn" id="psel" style="padding:8px 12px">${opts}</select>
+    <button class="btn pri" data-e="project:${pid}">Open the record</button>
+    <button class="btn" data-intake="${pid}">Intake (§3.1)</button>
+    <button class="btn" id="pTask">+ Task</button>
+    <button class="btn" id="pCase">+ Case</button>
+    <button class="btn" id="pAsk">+ Ask</button>
+    <button class="btn" id="pVisit">+ Site visit</button>
+    <button class="btn" id="pLLR">+ Lesson</button>
+  </div>
+  <div class="grid g4">
+    <div class="card"><div class="k-lbl">Stations signed off</div>
+      <div class="k-val sm">${d.stages.filter(s => s.status === "done").length}<span class="u">/ ${d.stages.length}</span></div></div>
+    <div class="card"><div class="k-lbl">Own time</div><div class="k-val sm">${n0(own)}<span class="u">d</span></div></div>
+    <div class="card"><div class="k-lbl">Wait time</div>
+      <div class="k-val sm" style="color:var(--st-wait)">${n0(wait)}<span class="u">d</span></div></div>
+    <div class="card"><div class="k-lbl">Open asks</div>
+      <div class="k-val sm" style="color:${d.coordination.length?"var(--bad)":"var(--good)"}">${d.coordination.length}</div></div>
+  </div>
+
+  <div class="sec"><h2>The spine</h2><p>Where this project sits, station by station.</p></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>#</th><th>Stage</th><th>Status</th><th class="num">Own</th>
+      <th class="num">Wait</th><th>Planned end</th><th>Checklist</th><th></th></tr></thead><tbody>
+    ${d.stages.map(s => `<tr>
+      <td class="mut">${s.stage}</td><td><b>${esc(d.stage_names[s.stage] || "")}</b></td>
+      <td>${stChip(s.status === "not_started" ? "queued" : s.status)}</td>
+      <td class="num">${s.own_days || "—"}</td>
+      <td class="num" style="color:var(--st-wait)">${s.wait_days || "—"}</td>
+      <td class="mut">${dash(s.planned_end && s.planned_end.slice(0, 10))}</td>
+      <td class="mut">${s.checklist
+        ? `${s.checks_done || 0}/${s.checks || 0}${s.checklist.signed_at
+            ? ` <span class="chip c-done">signed</span>` : ""}`
+        : `<span class="mut">—</span>`}</td>
+      <td style="white-space:nowrap">
+        ${s.status === "not_started"
+          ? `<button class="btn sm" data-stage="${pid}:${s.stage}:not_started">Initiate</button>`
+          : s.status === "running"
+          ? `<button class="btn sm" data-chk="${pid}:${s.stage}">Checklist</button>
+             <button class="btn sm" data-stage="${pid}:${s.stage}:running">Sign off</button>`
+          : `<button class="btn sm" data-chk="${pid}:${s.stage}">Checklist</button>`}
+      </td></tr>`).join("")}
+    </tbody></table></div>
+
+  <div class="sec"><h2>By team</h2></div>
+  <div class="grid g4">${Object.entries(d.by_team).map(([t, b]) => `
+    <div class="card"><h3>${esc(t)}</h3>
+      <div class="sub">${b.n} steps · ${b.late} over baseline</div>
+      ${clockBar(b.own, b.wait)}
+      <div style="display:flex;justify-content:space-between;margin-top:7px;font-size:11.5px">
+        <span>${b.own}d own</span><span>${b.wait}d wait</span></div></div>`).join("")}</div>
+
+  <div class="sec"><h2>Open with someone else</h2>
+    <p>Cross-team asks on this project that have not come back.</p></div>
+  <div class="card">${d.coordination.length ? `<table class="tbl">
+    <thead><tr><th>From</th><th>Waiting on</th><th>Ask</th><th class="num">SLA</th>
+      <th class="num">Age</th></tr></thead><tbody>
+    ${d.coordination.map(c => `<tr class="rc" data-e="coordination:${c.id}">
+      <td>${esc(c.from_team)}</td>
+      <td><span class="chip c-ext">${esc(c.to_lane)}</span></td>
+      <td>${esc(c.ask)}</td><td class="num mut">${dash(c.sla_days)}</td>
+      <td class="num"><b style="color:${c.sla_days && c.age > c.sla_days ? "var(--bad)" : "inherit"}">${c.age}d</b></td>
+      </tr>`).join("")}</tbody></table>` : `<div class="empty">Nothing outstanding.</div>`}</div>
+
+  <div class="sec"><h2>Cases on this project</h2></div>
+  <div class="card">${d.cases.length ? `<table class="tbl">
+    <thead><tr><th>Ref</th><th>Type</th><th>Title</th><th class="num">Value</th><th>Status</th></tr></thead>
+    <tbody>${d.cases.map(c => `<tr class="rc" data-e="case:${c.id}">
+      <td><b>${esc(c.ref)}</b></td><td>${esc(c.type)}</td>
+      <td>${esc(c.title)}</td><td class="num mut">${pkr(c.value_pkr)}</td>
+      <td>${stChip(c.status === "open" ? "running" : c.status === "rejected" ? "hold" : "done")}</td>
+      </tr>`).join("")}</tbody>
+    </table>` : `<div class="empty">No cases.</div>`}</div>
+
+  <div class="sec"><h2>The registers</h2>
+    <p>Everything this project has produced or is waiting on. Every row opens.</p></div>
+  <div class="grid g2">
+    <div class="card"><h3>Drawings &amp; issuance</h3>
+      <div class="sub">${d.drawings.length} sheets · ${d.transmittals.length} transmittals ·
+        ${d.drawings.filter(x => x.status === "IFC").length} issued for construction</div>
+      ${d.transmittals.length ? `<table class="tbl"><tbody>${d.transmittals.slice(0, 6).map(t => `
+        <tr class="rc" data-e="transmittal:${t.id}"><td><b>${esc(t.ref)}</b></td>
+        <td>${esc(t.phase)}</td><td class="num mut">${dash(t.drawing_count)} sheets</td>
+        <td class="mut">${esc((t.issued_at || "").slice(0, 10))}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="emptyx"><b>Nothing issued</b></div>`}
+      <div style="margin-top:9px"><button class="btn sm" data-goto="drawings:${pid}">Open the register →</button></div>
+    </div>
+    <div class="card"><h3>Authority file</h3>
+      <div class="sub">${d.authority.length} records ·
+        ${d.authority.filter(a => a.status !== "approved").length} still open</div>
+      ${d.authority.length ? `<table class="tbl"><tbody>${d.authority.map(a => `
+        <tr class="rc" data-e="authority:${a.id}"><td><b>${esc(a.ref)}</b></td>
+        <td>${esc(a.authority)}</td>
+        <td><span class="chip ${a.status === "approved" ? "c-done" : "c-wait"}">${esc(a.status)}</span></td>
+        <td class="num mut">${a.age}d</td></tr>`).join("")}</tbody></table>`
+        : `<div class="emptyx"><b>Nothing submitted</b></div>`}
+    </div>
+    <div class="card"><h3>Site visits — §15</h3>
+      <div class="sub">${d.visits.length} logged ·
+        ${d.visits.filter(v => v.non_compliance).length} found non-compliance</div>
+      ${d.visits.length ? `<table class="tbl"><tbody>${d.visits.slice(0, 6).map(v => `
+        <tr class="rc" data-e="visit:${v.id}"><td class="mut">${esc(v.visited_on)}</td>
+        <td>${esc((v.findings || "").slice(0, 60))}…</td>
+        <td>${v.non_compliance ? `<span class="chip c-late">NCR</span>`
+          : `<span class="chip c-done">clean</span>`}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="emptyx"><b>No visits logged</b></div>`}
+    </div>
+    <div class="card"><h3>Lessons learned — §7.6</h3>
+      <div class="sub">${d.lessons.length} raised on this project</div>
+      ${d.lessons.length ? `<table class="tbl"><tbody>${d.lessons.map(l => `
+        <tr class="rc" data-e="llr:${l.id}"><td><b>${esc(l.title.slice(0, 60))}</b></td>
+        <td><span class="chip ${l.status === "adopted" ? "c-done" : "c-queue"}">${esc(l.status)}</span></td>
+        </tr>`).join("")}</tbody></table>`
+        : `<div class="emptyx"><b>Nothing recorded</b>A project that produced no lessons
+           either went perfectly or nobody wrote them down.</div>`}
+    </div>
+  </div>`;
+
+  $("#psel").onchange = e => { CACHE.pid = +e.target.value; render(); };
+  $("#pTask").onclick = () => UI.newTask(pid);
+  $("#pCase").onclick = () => UI.newCase(pid);
+  $("#pAsk").onclick = () => UI.newAsk(pid);
+  $("#pVisit").onclick = () => UI.newVisit(pid);
+  $("#pLLR").onclick = () => UI.newLLR(pid);
+  UI.bind(p);
+}
+
+/* ── 4 · approvals inbox ─────────────────────────────────────────────── */
+async function vCases() {
+  const d = await api("/api/cases");
+  const p = $("#page");
+  const open = d.rows.filter(r => r.status === "open");
+  const mine = open.filter(r => r.at_zd);
+  const stuck = open.filter(r => !r.at_zd);
+
+  const card = r => `
+  <div class="card" style="margin-bottom:12px;cursor:pointer" data-e="case:${r.id}">
+    <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap">
+      <div>
+        <h3>${esc(r.ref)} · ${esc(r.title)} <span class="kl">open →</span></h3>
+        <div class="sub">${esc(r.pname || "—")} · ${esc(r.route)}
+          ${r.value_pkr ? ` · ${pkr(r.value_pkr)}` : ""}
+          ${r.value_gate ? ` · <b>${esc(r.value_gate)}</b>` : ""}</div>
+        <div class="src">Route source: ${esc(r.source)}</div>
+      </div>
+      <div style="text-align:right">
+        ${r.at_zd ? `<button class="btn pri sm" data-decide="${r.id}" data-ref="${esc(r.ref)}">Decide</button>`
+                  : `<button class="btn sm" data-decide="${r.id}" data-ref="${esc(r.ref)}">Try to decide</button>`}
+        <button class="btn sm" data-note="case:${r.id}">Note</button>
+        <div class="k-note" style="margin-top:6px">
+          ${r.overdue ? `<span class="chip c-late">${r.age}d — past ${r.current.sla_days}d SLA</span>`
+                      : `<span class="chip ${r.at_zd ? "c-run" : "c-wait"}">${r.age}d in lane</span>`}
+        </div>
+      </div>
+    </div>
+    <div class="route">${r.lanes.map((l, i) => `
+      <div class="lane ${i < r.position ? "past" : i === r.position ? "cur" : ""} ${l.is_stub ? "stub" : ""}">
+        <b>${esc(l.label)}</b><em>${esc(l.owner_lane)}${l.sla_days ? ` · ${l.sla_days}d` : ""}</em>
+        ${l.is_stub ? `<span class="stubtag">external</span>` : ""}
+      </div>`).join("")}</div>
+  </div>`;
+
+  p.innerHTML = `
+  <div class="actbar"><button class="btn pri" id="cNew">+ Raise a case</button></div>
+  <div class="note">One engine, <b>${d.routes.length} route definitions</b> —
+    ${esc(d.routes.join(" · "))}. They are the same object with different lanes, so adding
+    the five that were missing (value engineering, non-conformance, BOQ endorsement,
+    material sampling, as-built closeout) changed one table and no code. Lanes marked
+    <b>external</b> belong to a department whose system does not exist yet: they hold the
+    clock and record the wait, and become live lanes the day that system connects.</div>
+
+  <div class="grid g3">
+    <div class="card"><div class="k-lbl">Open</div><div class="k-val sm">${open.length}</div></div>
+    <div class="card dark"><div class="k-lbl">Waiting on Arch &amp; Design</div>
+      <div class="k-val sm">${mine.length}</div>
+      <div class="k-note">Actionable here, now.</div></div>
+    <div class="card"><div class="k-lbl">Outside the department</div>
+      <div class="k-val sm" style="color:var(--st-wait)">${stuck.length}</div>
+      <div class="k-note">${n0(stuck.reduce((a, b) => a + b.age, 0))} days accumulated.</div></div>
+  </div>
+
+  <div class="sec"><h2>Waiting on us</h2><p>These can be moved right now.</p></div>
+  ${mine.length ? mine.map(card).join("") : `<div class="card"><div class="empty">Nothing waiting on Arch &amp; Design.</div></div>`}
+
+  <div class="sec"><h2>Waiting on someone else</h2>
+    <p>Blocked outside the department. The block is logged — that count is the case for building their system.</p></div>
+  ${stuck.map(card).join("")}`;
+
+  $("#cNew").onclick = () => UI.newCase();
+  UI.bind(p);
+}
+
+/* ── 5 · coordination ledger ─────────────────────────────────────────── */
+async function vCoord() {
+  const d = await api("/api/coordination");
+  const p = $("#page");
+  const lanes = Object.entries(d.by_lane).sort((a, b) => b[1].days - a[1].days);
+  const total = lanes.reduce((a, b) => a + b[1].days, 0) || 1;
+
+  p.innerHTML = `
+  <div class="actbar"><button class="btn pri" id="kNew">+ Ask another team</button></div>
+  <div class="note">Every cross-team handoff in the booklet has a clock on it. Today those live
+    in inboxes and nobody can count them. <b>This is the ledger of who owes Arch &amp; Design
+    what, and for how long.</b></div>
+
+  <div class="sec"><h2>Who the department is waiting on</h2></div>
+  <div class="card">${lanes.length ? lanes.map(([lane, b]) => `
+    <div style="margin-bottom:13px">
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px">
+        <b>${esc(lane)}</b>
+        <span class="mut">${b.n} open · <b>${b.days}d</b> ${b.over ? `· <span style="color:var(--bad)">${b.over} past SLA</span>` : ""}</span>
+      </div>
+      <div class="bar"><i class="${b.over ? "warn" : ""}" style="width:${b.days / total * 100}%"></i></div>
+    </div>`).join("") : `<div class="empty">Nothing outstanding.</div>`}</div>
+
+  <div class="sec"><h2>Open asks</h2><p>Oldest first.</p></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>Project</th><th>Stage</th><th>From</th><th>Waiting on</th><th>Ask</th>
+      <th class="num">SLA</th><th class="num">Age</th><th></th></tr></thead><tbody>
+    ${d.rows.sort((a, b) => b.age - a.age).map(r => `<tr class="rc" data-e="coordination:${r.id}">
+      <td>${esc(r.pcode || "")}</td><td class="mut">${r.stage}</td>
+      <td>${esc(r.from_team)}</td>
+      <td><span class="chip ${r.external ? "c-ext" : "c-queue"}">${esc(r.to_lane)}</span></td>
+      <td>${esc(r.ask)}</td>
+      <td class="num mut">${dash(r.sla_days)}</td>
+      <td class="num"><b style="color:${r.over ? "var(--bad)" : "inherit"}">${r.age}d</b>
+        ${r.over ? `<br><span style="font-size:9.5px;color:var(--bad)">+${r.overrun}</span>` : ""}</td>
+      <td><button class="btn sm" data-close="${r.id}">Close</button></td></tr>`).join("")}
+    </tbody></table></div>`;
+
+  $("#kNew").onclick = () => UI.newAsk();
+  UI.bind(p);
+}
+
+/* ── 6 · tasks ───────────────────────────────────────────────────────── */
+async function vTasks() {
+  const f = CACHE.tf || (CACHE.tf = {team: "", status: ""});
+  const qs = new URLSearchParams();
+  if (f.team) qs.set("team", f.team);
+  if (f.status) qs.set("status", f.status);
+  if (CACHE.pid) qs.set("project", CACHE.pid);
+  const d = await api("/api/tasks?" + qs);
+  const p = $("#page");
+  const pn = Object.fromEntries(BOOT.projects.map(x => [x.id, x.code || x.name]));
+
+  p.innerHTML = `
+  <div class="pills">
+    <button class="pill ${!f.team ? "on" : ""}" data-t="">All teams</button>
+    ${BOOT.teams.map(t => `<button class="pill ${f.team === t ? "on" : ""}" data-t="${t}">${t}</button>`).join("")}
+    <span style="width:14px"></span>
+    ${["", "queued", "running", "waiting", "done"].map(s =>
+      `<button class="pill ${f.status === s ? "on" : ""}" data-s="${s}">${s || "Any status"}</button>`).join("")}
+  </div>
+  <div class="actbar"><button class="btn pri" id="tNew">+ Task</button></div>
+  <div class="note">Tasks are generated from the catalog, so <b>planned dates come from the
+    department's own published TAT</b> — not from whatever someone typed. Variance is measured
+    on own time only; waiting on an external lane never counts against the team.</div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>Prj</th><th>St</th><th>Team</th><th>Workflow</th><th>Step</th><th>Lane</th>
+      <th class="num">Base</th><th class="num">Own</th><th class="num">Wait</th>
+      <th class="num">Var</th><th>Rev</th><th>Status</th><th></th></tr></thead><tbody>
+    ${d.rows.map(t => `<tr class="rc" data-e="task:${t.id}">
+      <td class="mut">${esc(pn[t.project_id] || "")}</td>
+      <td class="mut">${t.stage}</td><td>${esc(t.team)}</td>
+      <td class="mut" style="max-width:150px">${esc(t.workflow || "")}</td>
+      <td><b>${esc(t.title)}</b></td>
+      <td>${t.external ? `<span class="chip c-ext">${esc(t.lane)}</span>` : `<span class="mut">${esc(t.lane)}</span>`}</td>
+      <td class="num mut">${dash(t.baseline)}</td>
+      <td class="num">${t.own || "—"}</td>
+      <td class="num" style="color:var(--st-wait)">${t.wait || "—"}</td>
+      <td class="num"><b style="color:${t.variance > 0 ? "var(--bad)" : t.variance < 0 ? "var(--good)" : "inherit"}">
+        ${t.variance == null ? "—" : (t.variance > 0 ? "+" : "") + t.variance}</b></td>
+      <td>${t.revision ? `<span class="chip c-hold">×${t.revision}</span>` : `<span class="mut">—</span>`}</td>
+      <td>${stChip(t.status)}</td>
+      <td style="white-space:nowrap">
+        ${t.status === "queued" ? `<button class="btn sm" data-act="start" data-id="${t.id}">Start</button>` : ""}
+        ${t.status === "running" || t.status === "waiting" ?
+          `<button class="btn sm" data-act="finish" data-id="${t.id}">Finish</button>` : ""}
+        ${t.status === "done" ? `<button class="btn sm" data-act="revise" data-id="${t.id}">Revise</button>` : ""}
+        <button class="btn sm" data-assign="${t.id}" data-team="${esc(t.team)}">Assign</button>
+      </td></tr>`).join("")}
+    </tbody></table></div>`;
+
+  p.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { f.team = b.dataset.t; render(); });
+  p.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { f.status = b.dataset.s; render(); });
+  $("#tNew").onclick = () => UI.newTask();
+  UI.bind(p);
+
+}
+
+/* ── 7 · team performance ────────────────────────────────────────────── */
+async function vTeam() {
+  const t = CACHE.team || (CACHE.team = BOOT.teams[0]);
+  const d = await api("/api/team/" + encodeURIComponent(t));
+  const p = $("#page");
+  const wf = Object.entries(d.workflows).sort((a, b) => b[1].n - a[1].n);
+
+  p.innerHTML = `
+  <div class="pills">${BOOT.teams.map(x =>
+    `<button class="pill ${x === t ? "on" : ""}" data-team="${x}">${x}</button>`).join("")}</div>
+  <div class="note">One surface, four configurations — the same file rendered per team, exactly
+    as PULSE does it for its three departments. Adding a fifth team is a config entry.</div>
+
+  <div class="grid g4">
+    <div class="card"><div class="k-lbl">People</div><div class="k-val sm">${d.people.length}</div></div>
+    <div class="card"><div class="k-lbl">On time</div>
+      <div class="k-val sm" style="color:${d.kpi.on_time_pct >= 70 ? "var(--good)" : "var(--bad)"}">
+        ${d.kpi.on_time_pct == null ? "—" : d.kpi.on_time_pct + "%"}</div>
+      <div class="k-note">Of ${d.kpi.done} closed steps with a published baseline. Own time only.</div></div>
+    <div class="card"><div class="k-lbl">Revision cycles</div><div class="k-val sm">${d.kpi.revisions}</div>
+      <div class="k-note">"Changes Required" loops — the metric the booklet implies and nobody counts.</div></div>
+    <div class="card dark"><div class="k-lbl">Time lost waiting</div>
+      <div class="k-val sm">${d.kpi.wait_share}%</div>
+      <div class="k-note">${n0(d.kpi.wait_days)}d of ${n0(d.kpi.own_days + d.kpi.wait_days)}d elapsed.</div></div>
+  </div>
+
+  <div class="sec"><h2>By workflow</h2><p>Against the booklet's published durations.</p></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>Workflow</th><th class="num">Steps</th><th class="num">Done</th>
+      <th class="num">Over</th><th class="num">Baseline</th><th class="num">Own</th>
+      <th class="num">Wait</th><th class="num">Rev</th></tr></thead><tbody>
+    ${wf.map(([name, w]) => `<tr>
+      <td><b>${esc(name)}</b></td><td class="num">${w.n}</td><td class="num">${w.done}</td>
+      <td class="num"><b style="color:${w.late ? "var(--bad)" : "inherit"}">${w.late || "—"}</b></td>
+      <td class="num mut">${w.base || "—"}</td><td class="num">${w.own || "—"}</td>
+      <td class="num" style="color:var(--st-wait)">${w.wait || "—"}</td>
+      <td class="num">${w.rev || "—"}</td></tr>`).join("")}
+    </tbody></table></div>
+
+  <div class="sec"><h2>Waiting on others</h2></div>
+  <div class="card">${d.owed.length ? `<table class="tbl">
+    <thead><tr><th>Waiting on</th><th>Ask</th><th class="num">SLA</th><th class="num">Age</th></tr></thead>
+    <tbody>${d.owed.slice(0, 25).map(o => `<tr class="rc" data-e="coordination:${o.id}">
+      <td><span class="chip c-ext">${esc(o.to_lane)}</span></td><td>${esc(o.ask)}</td>
+      <td class="num mut">${dash(o.sla_days)}</td>
+      <td class="num"><b style="color:${o.sla_days && o.age > o.sla_days ? "var(--bad)" : "inherit"}">${o.age}d</b></td>
+      </tr>`).join("")}</tbody></table>` : `<div class="empty">Nothing outstanding.</div>`}</div>
+
+  <div class="sec"><h2>The team</h2></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>Name</th><th>Designation</th><th>Role</th></tr></thead>
+    <tbody>${d.people.map(x => `<tr class="rc" data-e="person:${x.id}">
+      <td><b>${esc(x.name)}</b></td>
+      <td class="mut">${esc(x.designation || "")}</td><td class="mut">${esc(x.role)}</td></tr>`).join("")}
+    </tbody></table></div>`;
+
+  p.querySelectorAll("[data-team]").forEach(b => b.onclick = () => { CACHE.team = b.dataset.team; render(); });
+  UI.bind(p);
+}
+
+/* ── 8 · obligations ─────────────────────────────────────────────────── */
+async function vOblig() {
+  const d = await api("/api/obligations");
+  const p = $("#page");
+  const pn = Object.fromEntries(BOOT.projects.map(x => [x.id, x.name]));
+
+  p.innerHTML = `
+  <div class="actbar"><button class="btn pri" id="oVisit">+ Log a site visit</button></div>
+  <div class="note">The Manual makes recurring commitments — a <b>weekly design review for every
+    active project</b> (§9), a <b>monthly site visit</b> and a <b>Monthly Design Compliance
+    Report</b> (§15). Nothing tracks them today, so nothing enforces them. PULSE has no
+    recurrence concept at all; this is genuinely new.</div>
+
+  <div class="grid g3">${Object.entries(d.summary).map(([label, a]) => `
+    <div class="card"><h3>${esc(label)}</h3>
+      <div class="sub">${a.due} instances</div>
+      <div class="k-val sm" style="color:${a.missed ? "var(--bad)" : "var(--good)"}">${a.missed}
+        <span class="u">missed</span></div>
+      <div class="bar" style="margin-top:9px">
+        <i class="${a.missed ? "warn" : "ok"}" style="width:${a.done / a.due * 100}%"></i></div>
+      <div class="k-note">${a.done} of ${a.due} completed</div></div>`).join("")}</div>
+
+  <div class="sec"><h2>Register</h2></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>Obligation</th><th>Project</th><th>Due</th><th>Status</th><th>Source</th><th></th></tr></thead>
+    <tbody>${d.rows.map(r => `<tr class="rc" data-e="obligation:${r.id}">
+      <td><b>${esc(r.label)}</b></td>
+      <td class="mut">${esc(r.pname || "Department")}</td>
+      <td class="mut">${esc(r.due_on)}</td>
+      <td>${r.done_at ? '<span class="chip c-done">Done</span>' :
+            r.missed ? '<span class="chip c-late">Missed</span>' :
+                       '<span class="chip c-queue">Due</span>'}</td>
+      <td class="src">${esc(r.source || "")}</td>
+      <td>${r.done_at ? "" : `<button class="btn sm" data-oblig="${r.id}" data-lbl="${esc(r.label)}">Complete</button>`}</td>
+      </tr>`).join("")}
+    </tbody></table></div>`;
+  $("#oVisit").onclick = () => UI.newVisit();
+  UI.bind(p);
+}
+
+/* ── 9 · catalog ─────────────────────────────────────────────────────── */
+async function vCatalog() {
+  const d = CACHE.cat || (CACHE.cat = await api("/api/catalog"));
+  const p = $("#page");
+  const team = CACHE.cteam || (CACHE.cteam = "Architecture");
+  const srcf = CACHE.csrc || (CACHE.csrc = "");
+  const wmeta = {};
+  (d.workflows || []).forEach(w => (wmeta[w.team + "|" + w.workflow] = w));
+  let rows = d.rows.filter(r => r.team === team);
+  if (srcf === "booklet") rows = rows.filter(r => r.source === d.booklet);
+  if (srcf === "manual") rows = rows.filter(r => r.source !== d.booklet);
+  const byWf = {};
+  rows.forEach(r => (byWf[r.workflow] = byWf[r.workflow] || []).push(r));
+
+  p.innerHTML = `
+  <div class="note">The department's process, as data. <b>${d.stats.workflows} workflows ·
+    ${d.stats.steps} steps · ${d.stats.rework_points} rework loops · ${d.stats.gates} gates ·
+    ${d.stats.stations} stations.</b> ${d.stats.from_booklet} workflows are transcribed from
+    Design Workflow Booklet Vol.1. <b>${d.stats.from_manual} are transcribed from the
+    Guidelines Manual's prose</b> — value engineering (§8), BOQ endorsement (§10),
+    finishing and sampling (§12), QA/QC coordination (§16), regulatory inspection support
+    (§17), closeout and as-built (§18) and the lessons-learned review (§7.6). The booklet
+    never drew a swimlane for any of them, and they are where a project spends its last
+    three years. Every step carries its source. Click a step to see where it is live.</div>
+
+  ${d.conflicts.length ? `<div class="note warn">
+    <b>${d.conflicts.length} TAT conflicts between the Booklet and the Guidelines Manual §4.0.</b>
+    Both are stored; neither is silently preferred. Until this is ruled on, no SLA number here is defensible.
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr><th>Stage</th><th>Workflow</th><th>Booklet</th><th>Manual</th></tr></thead>
+      <tbody>${d.conflicts.map(c => `<tr><td>${c.stage}</td><td><b>${esc(c.workflow)}</b></td>
+        <td>${esc(c.booklet)}</td><td>${esc(c.manual)}</td></tr>`).join("")}</tbody></table>
+  </div>` : ""}
+
+  ${d.stats.unknown_tat ? `<div class="note warn"><b>${d.stats.unknown_tat} steps have no duration
+    at all</b> — the source's duration column is blank, or the step waits on a party outside
+    the department with no committed date. They render as "—", never as zero, because a zero
+    would quietly deflate every rollup.</div>` : ""}
+
+  <div class="pills">${["Architecture", "MEP", "Structure", "Creative"].map(t =>
+    `<button class="pill ${t === team ? "on" : ""}" data-ct="${t}">${t}</button>`).join("")}
+    <span style="width:14px"></span>
+    ${[["", "Both sources"], ["booklet", "Booklet Vol.1"], ["manual", "From the Manual"]].map(
+      ([v, l]) => `<button class="pill ${srcf === v ? "on" : ""}" data-cs="${v}">${l}</button>`).join("")}
+  </div>
+
+  ${Object.keys(byWf).length ? Object.entries(byWf).map(([wf, steps]) => {
+    const s0 = steps[0], sum = steps.reduce((a, b) => a + (b.tat_days || 0), 0);
+    const meta = wmeta[team + "|" + wf] || {};
+    const fromManual = s0.source !== d.booklet;
+    return `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div><h3>${esc(wf)}</h3>
+          <div class="sub">Stage ${s0.stage} · ${steps.length} steps · steps sum to ${sum} working days
+            ${meta.unknown ? ` · ${meta.unknown} with no duration` : ""}
+            ${meta.external ? ` · ${meta.external} outside the department` : ""}</div>
+          <span class="prov ${fromManual ? "manual" : ""}">${esc(s0.source || "")}</span></div>
+        <div style="text-align:right">
+          <div class="chip c-run">Booklet ${esc(s0.tat_booklet || "—")}</div>
+          ${s0.tat_manual ? `<div class="chip ${s0.tat_manual !== s0.tat_booklet ? "c-late" : "c-done"}"
+             style="margin-top:4px">Manual ${esc(s0.tat_manual)}</div>` : ""}
+        </div></div>
+      <table class="tbl" style="margin-top:11px"><tbody>
+      ${steps.map(r => `<tr class="rc" data-e="product:${r.id}">
+        <td class="mut" style="width:26px">${r.seq}</td>
+        <td><b>${esc(r.step)}</b></td>
+        <td style="width:130px">${r.is_external ? `<span class="chip c-ext">${esc(r.lane)}</span>` : ""}</td>
+        <td class="num" style="width:60px">${r.tat_days == null ? '<span class="mut">—</span>' : r.tat_days + "d"}</td>
+        <td style="width:150px">
+          ${r.maker ? '<span class="chip c-queue">maker</span> ' : ""}
+          ${r.checker ? '<span class="chip c-run">checker</span> ' : ""}
+          ${r.rework ? '<span class="chip c-hold">rework</span> ' : ""}
+          ${r.gate ? '<span class="chip c-late">gate</span>' : ""}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  }).join("") : `<div class="emptyx"><b>Nothing matches that filter</b>${team} has no
+    workflows from that source.</div>`}`;
+
+  p.querySelectorAll("[data-ct]").forEach(b => b.onclick = () => { CACHE.cteam = b.dataset.ct; render(); });
+  p.querySelectorAll("[data-cs]").forEach(b => b.onclick = () => { CACHE.csrc = b.dataset.cs; render(); });
+  UI.bind(p);
+}
+
+/* Entities the drawer knows how to open — a ledger row for a template edit or a
+   system seed has nothing to open, and should not pretend it does. */
+const LEDGER_KINDS = {project:1, task:1, case:1, drawing:1, transmittal:1,
+  coordination:1, obligation:1, visit:1, llr:1, authority:1};
+
+/* ── 10 · ledger ─────────────────────────────────────────────────────── */
+async function vLedger() {
+  const d = await api("/api/ledger");
+  const p = $("#page");
+  const blocked = d.rows.filter(r => r.blocked);
+  p.innerHTML = `
+  <div class="note">Append-only. Every action, who took it, and <b>the authority they acted with</b>.
+    Blocked attempts are recorded too — "how often were we stopped waiting on another
+    department" is the number that justifies building theirs.</div>
+  <div class="grid g2">
+    <div class="card"><div class="k-lbl">Actions recorded</div><div class="k-val sm">${d.rows.length}</div></div>
+    <div class="card"><div class="k-lbl">Blocked attempts</div>
+      <div class="k-val sm" style="color:${blocked.length ? "var(--st-wait)" : "var(--good)"}">${blocked.length}</div>
+      <div class="k-note">Gate refusals and external-lane blocks.</div></div>
+  </div>
+  <div class="sec"><h2>Activity</h2></div>
+  <div class="card scroll"><table class="tbl">
+    <thead><tr><th>When</th><th>Who</th><th>Tier</th><th>Entity</th><th>Action</th>
+      <th>Summary</th><th>Project</th></tr></thead><tbody>
+    ${d.rows.map(r => `<tr class="${LEDGER_KINDS[r.entity] && r.entity_id ? "rc" : ""}"
+      ${LEDGER_KINDS[r.entity] && r.entity_id ? `data-e="${r.entity}:${r.entity_id}"` : ""}
+      style="${r.blocked ? "background:var(--st-wait-t)" : ""}">
+      <td class="mut" style="white-space:nowrap">${esc((r.at || "").replace("T", " ").slice(0, 16))}</td>
+      <td><b>${esc(r.who || "")}</b></td><td class="mut">${dash(r.tier)}</td>
+      <td class="mut">${esc(r.entity)}</td><td>${esc(r.action)}</td>
+      <td>${esc(r.summary || "")}</td><td class="mut">${esc(r.project || "")}</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+
+/* ── 11 · people ─────────────────────────────────────────────────────── */
+function vPeople() {
+  const p = $("#page");
+  const byTeam = {};
+  BOOT.people.forEach(x => (byTeam[x.team] = byTeam[x.team] || []).push(x));
+  p.innerHTML = `
+  <div class="note">${BOOT.people.length} people across ${Object.keys(byTeam).length} teams,
+    as listed in the booklet. Tier drives what a person may approve — the value thresholds
+    (petty ${n0(BOOT.thresholds.petty)} · CPC ${n0(BOOT.thresholds.cpc)} ·
+    CEO ${n0(BOOT.thresholds.ceo)}) come from the Supply Chain Manual and are shared across
+    every department that will sit on this kernel.</div>
+  <div class="grid g2">${Object.entries(byTeam).map(([t, list]) => `
+    <div class="card"><h3>${esc(t)}</h3><div class="sub">${list.length} people</div>
+      <table class="tbl"><tbody>${list.map(x => `<tr class="rc" data-e="person:${x.id}">
+        <td><b>${esc(x.name)}</b></td><td class="mut">${esc(x.designation || "")}</td>
+        <td class="mut" style="width:70px">T${x.tier}</td></tr>`).join("")}</tbody></table>
+    </div>`).join("")}</div>`;
+}
+
+/* ── router ──────────────────────────────────────────────────────────── */
+var VIEWS = {exec:vExec, matrix:vMatrix, project:vProject, cases:vCases, coord:vCoord,
+               tasks:vTasks, team:vTeam, oblig:vOblig, catalog:vCatalog,
+               ledger:vLedger, people:vPeople};
+const SUB = {
+  queue:"Everything waiting on you — tasks, decisions, obligations. Start here.",
+  drawings:"The register, every revision, and which sheets went out on which transmittal — §5.",
+  site:"Site visits, non-conformance and the authority file — §15, §16, §17.",
+  llr:"Lessons learned, and the stage checklist they change — §7.6 and §4.2.",
+  exec:"Arch & Design at a glance — the spine, the queue, and where the time goes.",
+  matrix:"Every project against all 14 stations. Click a cell to open the project.",
+  project:"One project in depth — stages, teams, open asks and cases.",
+  cases:"MAR · DCR · RFI · shop drawings · vetting. One case engine, five routes.",
+  coord:"Who owes Arch & Design what, and for how long.",
+  tasks:"Generated from the catalog. Variance measured on own time only.",
+  team:"Architecture · Structure · MEP · Creative — one surface, four configs.",
+  oblig:"Recurring commitments the Manual makes and nothing currently enforces.",
+  catalog:"Design Workflow Booklet Vol.1 as data, conflicts included.",
+  ledger:"Every action, every authority, every blocked attempt.",
+  people:"The department, and who may approve what.",
+};
+
+async function render() {
+  const n = NAV.find(x => x.k === TAB);
+  $("#headTitle").textContent = n.h;
+  $("#headSub").textContent = SUB[TAB] || "";
+  $("#page").innerHTML = `<div class="empty">Loading…</div>`;
+  E.badge();
+  try { await VIEWS[TAB](); }
+  catch (e) { $("#page").innerHTML = `<div class="card"><div class="empty">
+    Could not load this surface.<br><br><code>${esc(e.message)}</code></div></div>`; }
+}
+
+(async function init() {
+  const th = localStorage.getItem("zd.theme");
+  if (th) document.documentElement.setAttribute("data-theme", th);
+  $("#btnTheme").onclick = () => {
+    const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "" : "dark";
+    if (cur) document.documentElement.setAttribute("data-theme", cur);
+    else document.documentElement.removeAttribute("data-theme");
+    localStorage.setItem("zd.theme", cur);
+  };
+  $("#btnOut").onclick = () => {
+    localStorage.removeItem("zd.tok"); location.href = M + "/login.html";
+  };
+  try { BOOT = await api("/api/bootstrap"); }
+  catch (e) { $("#page").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const u = BOOT.user;
+  $("#railAv").textContent = (u.name || "?").split(" ").map(x => x[0]).slice(0, 2).join("");
+  $("#railAv").setAttribute("data-tip", `${u.name} — ${u.designation}`);
+  $("#hSearch").onclick = () => E.pal();
+  $("#hBell").onclick = (ev) => { ev.stopPropagation(); E.notify(); };
+  TAB = fromHash();
+  drawRail();
+  render();
+})();

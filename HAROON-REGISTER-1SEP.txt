@@ -1,0 +1,656 @@
+ZD — Architecture & Design Meeting
+Haroon — Requirements, Feedback & Update Register
+Meeting Date: Tuesday, 1 September 2026
+Time: 10:02 AM
+Subject: ZD Architecture & Design Review
+Purpose: Review the current ZD modules, workflows, dashboards and management views, and capture required changes based on Haroon's feedback.
+1. Executive Summary
+The architecture and design of ZD were reviewed module-by-module with Haroon, including:
+Module overview
+System Administration
+Raise a Case
+Cross-team collaboration
+Visit Management
+Project Management
+Decisions Waiting on You
+Lessons Learned
+Executive View
+Site & Compliance
+Cross-Team Tasks
+SLA/TAT configuration
+Project Stage Matrix
+Project Insights
+Delivery Cycle
+Approval Inbox
+Coordination Ledger
+Task Management
+The primary feedback was around internal collaboration, accountability, TAT/priority management, structured site findings, historical visibility, lessons learned, senior-management collaboration, and stronger executive-level reporting.
+The following changes should be treated as the required update backlog from the meeting.
+2. Core Updates Requested by Haroon
+2.1 Raise a Case — Cross-Team Collaboration
+Current Concept
+The Raise a Case module was demonstrated based on the ZD manual.
+Required Updates
+ZD should support cases/tasks being raised to another department or team, not only within the requestor's own department.
+The workflow should support:
+Request Raised → Assigned Team → Acknowledgement → Investigation / Response → Back-and-Forth Communication → Resolution
+Required functionality
+Requestor can raise a case to another team.
+Case should land with the relevant team.
+Case may also be routed to the relevant Line Manager where required.
+Receiving team must acknowledge the request.
+Initial acknowledgement should be tracked against a 24-hour expectation.
+Requestor and receiving team should have a proper back-and-forth communication mechanism.
+The receiving team should be able to provide updates without closing the case.
+If the receiving team does not respond within the required period, the system should allow escalation.
+Escalation should be visible and traceable.
+Communication history should form part of the case timeline.
+Objective
+Increase internal communication and collaboration between departments, rather than forcing communication to happen outside ZD.
+3. Priority, TAT and SLA
+Haroon specifically highlighted that Priority needs to be separated from TAT/SLA.
+Required Updates
+The system should support:
+Priority assignment.
+Priority levels.
+TAT tracking.
+SLA tracking.
+Priority changes during the lifecycle.
+Visibility of how priority changes affect the case/task.
+Escalation based on missed response/TAT requirements.
+Important distinction
+TAT/SLA = time-based performance measurement
+Priority = business importance/urgency
+Priority should therefore not simply replace SLA/TAT.
+The system should allow the priority of an item to change during its lifecycle while maintaining the historical record.
+4. Log a Visit — Findings & Evidence
+The Visit Management workflow requires significantly more structured findings functionality.
+4.1 Evidence Attachments
+The Findings section should support attachments including:
+Pictures
+Reports
+Videos
+Documents
+Other relevant evidence
+Attachments should remain linked to the relevant finding.
+4.2 Multiple Findings / Tabs
+A single visit may identify multiple issues.
+Example:
+Rumanza Visit
+During one visit, 5 separate problems may be identified.
+The system should allow the user to create:
+Finding 1
+Finding 2
+Finding 3
+Finding 4
+Finding 5
+Each finding should be independently structured.
+Each finding should be able to contain:
+Finding category
+Description
+Location/context
+Pictures
+Highlights/evidence
+Reports/documents
+Video
+Responsible team
+Assigned person/team
+Status
+Follow-up/action
+TAT
+Resolution information
+5. Visit Findings → RFI / Relevant Team
+Haroon highlighted that individual findings should be assignable to the relevant PM/team.
+Therefore:
+Visit → Finding → Relevant Team → RFI / Action
+should be supported within ZD.
+A visit should not become one large unstructured record.
+Instead, individual findings should be capable of becoming actionable items.
+6. Historical Visit Data
+Users should be able to access previous historical information.
+For a project/site, the system should allow users to see:
+Previous visits
+Previous findings
+Previous issues
+Previous actions
+Previous evidence
+Previous resolutions
+Recurring problems
+Historical status
+This should allow the user to understand whether an issue is:
+New / Recurring / Previously Resolved / Still Outstanding
+7. Backup / Existing Data Sources
+Although ZD should become the primary structured system, Haroon indicated that the existing:
+Drive
+Excel sheets
+should be retained as backup/reference sources where required.
+The implementation should therefore avoid immediately eliminating historical records stored in existing sources without an appropriate migration/backup strategy.
+8. Open a Project
+The current "Open a Project" terminology should be changed.
+Required change
+Use:
+"Add a Project"
+instead of:
+"Open a Project"
+The terminology should be consistent across the system.
+9. Decisions Waiting on You
+The Decisions Waiting on You section requires stronger action-oriented visibility.
+Required Updates
+Each decision should show:
+Decision/request
+Person responsible
+Date raised
+TAT
+Due date
+Priority
+Current status
+Days remaining / overdue
+Required action
+"What Should I Do Today?"
+Haroon specifically requested a view showing:
+What should I do today?
+This should provide an action-oriented daily view rather than only showing a list of pending decisions.
+The user should be able to immediately identify:
+What requires action today
+What is overdue
+What is approaching deadline
+What requires approval
+What requires a response
+What has been waiting too long
+This should also be represented in the main table for detailed visibility.
+10. Lessons Learned
+Lessons Learned was identified as an important module/functionality.
+This should not be treated as a simple decision or case.
+Core Principle
+A Lesson Learned represents:
+"What happened, why did it happen, and how can we improve in the future?"
+It is therefore a future improvement mechanism, not a decision.
+11. Lesson Learned — Escalation & Visibility
+Haroon requested that Lessons Learned should have visibility at senior-management and audit levels.
+When a Lesson Learned is raised:
+Lesson Learned → Department Head Visibility → Audit Visibility → Learning Repository
+The relevant Heads should be able to see the lessons generated from their departments.
+Audit should also have visibility where appropriate.
+12. Lesson Learned — Root Cause / Performance Analysis
+Lessons Learned should be capable of capturing issues such as:
+SLA/TAT took too long
+Why did it take too long?
+Where was the delay?
+Which team/process caused the delay?
+Was the delay internal or external?
+Was there a dependency?
+What should change?
+What preventive action should be taken?
+This creates a connection between operational performance and organisational learning.
+13. Learning Summary Page
+A dedicated Learning Summary page should be introduced.
+The page should consolidate lessons learned and allow management to understand:
+Number of lessons learned
+Major recurring issues
+Root causes
+Departments involved
+Process weaknesses
+TAT/SLA-related problems
+Recommended improvements
+Open improvement actions
+Closed improvements
+Recurring lessons
+The objective is to turn lessons learned into institutional knowledge and process improvement.
+14. Lesson Learned — Department Coverage
+The discipline/department classification needs to be expanded.
+It should not be limited to the currently available departments.
+Additional departments such as Legal should be supported.
+The department structure should therefore be aligned with the broader organisational hierarchy.
+15. Cross-System Collaboration
+Haroon highlighted that ZD should not operate in isolation.
+Where a lesson, case, task or finding requires collaboration with another system/module, users should be able to:
+Link the item
+Refer it to another module/system
+Maintain the relationship
+Track the originating item
+Maintain visibility of the resulting action
+The goal is to ensure that collaboration does not require users to manually recreate the same information in multiple places.
+16. Senior Management Collaboration
+A key organisational requirement was identified:
+Collaboration should not be limited to junior employees across departments.
+Sometimes departments need to coordinate at a senior-management level.
+ZD should therefore support collaboration/escalation involving:
+Department Heads
+Senior Managers
+Relevant Line Managers
+Cross-functional leadership
+The system should make it possible to involve the appropriate senior person when normal team-level collaboration is insufficient.
+17. Executive View
+The Executive View was reviewed and received additional requirements.
+Required visibility
+Executives should be able to see:
+Department overview
+Department-level facts
+Workload
+Performance
+Pending items
+Delays
+TAT/SLA performance
+Cross-team dependencies
+Project-related information
+18. Department-Level Bifurcation
+Haroon highlighted that Architecture & Design is front-heavy.
+The workload is particularly high during the first six months and then reduces.
+Therefore, the Executive View should provide departmental/workload bifurcation over time.
+This should allow management to understand:
+Workload by department
+Workload by period
+Workload distribution
+Front-loaded vs later workload
+Resource pressure
+Performance trends
+This is particularly important for departments whose workload is not evenly distributed throughout a project lifecycle.
+19. Site & Compliance
+The Site & Compliance module should support stronger evidence capture.
+Required update
+When a non-compliance issue is identified, users should be able to attach:
+Photographs
+Supporting documents
+Reports
+Other relevant evidence
+The evidence should be linked directly to the non-compliance record.
+20. Asana / PM Integration Context
+It was noted that the PM team is already using Asana.
+The current operational process therefore needs to consider how ZD and existing PM workflows interact.
+The objective should be to avoid unnecessary duplicate task entry and ensure that relevant PM tasks/actions remain traceable.
+21. Cross-Team Tasks
+The Cross-Team Tasks functionality was reviewed.
+Required terminology change
+The current concept of SLA for the task timeline should be changed to:
+TAT
+where the metric is intended to represent the expected turnaround time for the task.
+The terminology should be consistent across the relevant ZD workflows.
+22. SLA Baseline
+The SLA baseline requires further review.
+A discrepancy was identified during the discussion.
+Required action
+The SLA baseline should be:
+Reviewed
+Reconciled
+Validated against the actual workflow
+Confirmed before being treated as the system baseline
+No final baseline should be locked until the discrepancy is resolved.
+23. Workflow Catalogue
+There is a requirement to consolidate the workflows into a formal Workflow Catalogue.
+The catalogue should establish, for each workflow:
+Workflow name
+Purpose
+Trigger
+Requestor
+Receiving team
+Approval requirements
+Stages
+TAT
+SLA where applicable
+Priority
+Escalation rules
+Dependencies
+Completion criteria
+Responsible roles
+Management visibility
+This should become the reference point for implementing ZD workflows consistently.
+24. Project Stage Matrix
+The Project Stage Matrix was demonstrated using a heatmap.
+The heatmap should continue to provide visibility into how much time is being consumed at each project stage.
+Required visibility
+The matrix should distinguish between:
+Expected duration
+Actual duration
+Waiting time
+Hold time
+In-progress time
+Delay
+Team-caused delay
+External dependency
+Other blocking time
+25. Team Waiting / Delay Visibility
+The Project Stage Matrix should clearly show:
+How much time is being spent waiting for our team vs. other parties.
+This should allow management to identify:
+Internal delays
+External delays
+Department delays
+Dependency delays
+Bottlenecks
+Stages with excessive waiting time
+The purpose is to avoid incorrectly attributing delays to a team when the actual blocker is elsewhere.
+26. Project Insights
+Project Insights should continue to provide analytical visibility into project performance.
+It should connect with the underlying:
+Project Stage Matrix
+TAT
+Waiting time
+Hold time
+In-progress time
+Dependencies
+Delivery cycle
+Approval timelines
+The definitions of each timing category need to be finalised before the metrics are treated as authoritative.
+27. Time Definitions — Wait / Hold / In Progress
+A key point requiring clarification was identified.
+The system needs clear definitions for:
+Wait
+Time during which an item is waiting for another person/team/action.
+Hold / Blocking Time
+Time during which progress is intentionally or externally blocked.
+In Progress
+Time during which the responsible team is actively working on the item.
+Important discussion point
+It was suggested that Wait may also need to be counted as part of In Progress for certain reporting purposes.
+This needs to be formally defined before implementation of the final performance calculations.
+28. Own Time / Hold Time
+The concept of Own Time was discussed.
+This should be reviewed against the concept of:
+Hold Time / Blocking Time
+The final data model should establish exactly what each metric means and avoid overlapping calculations.
+29. Delivery Cycle
+The Delivery Cycle requires careful treatment because delays and approvals can affect the reported performance of senior managers.
+Important consideration
+When a Director signs off, the timing of that approval can currently reflect negatively on the senior manager/director in the delivery-cycle metrics.
+The calculation therefore needs to distinguish between:
+Team execution time
+Waiting for approval
+Director approval time
+External dependency
+PM activity
+Actual delivery time
+30. MD Approval
+It was specifically discussed that:
+MD Approval time should be removed from Delivery Time.
+This should be reflected in the calculation logic once the final metric definitions are confirmed.
+31. PM / Asana Context in Delivery
+The current operational delivery process is heavily supported by:
+Asana
+PM processes
+The ZD Delivery Cycle should therefore account for the actual operating model rather than assuming all delivery activity occurs directly inside ZD.
+Integration/linkage with PM activity should be considered where necessary.
+32. Approval Inbox
+The Approval Inbox was demonstrated.
+The Approval Inbox should remain an action-oriented workspace for approvals.
+It should provide sufficient information for the approver to understand:
+What requires approval
+Why approval is required
+Who raised it
+Priority
+TAT
+Due date
+Current stage
+Supporting information
+Previous activity
+This should also connect with the broader "What should I do today?" concept.
+33. Coordination Ledger
+The Coordination Ledger was reviewed.
+Its purpose should be to clearly show:
+Which department is waiting on whom.
+It should provide visibility into cross-functional dependencies and waiting relationships.
+Example structure:
+Department A → Waiting on → Department B → Required Action → Since Date → TAT → Status
+This should make departmental bottlenecks immediately visible to management.
+34. Task Management
+Task Management was reviewed as part of the overall workflow.
+It should connect with:
+Cases
+Cross-team requests
+RFIs
+Visits
+Findings
+Projects
+Approvals
+Department actions
+Lessons Learned
+Tasks should not become isolated records; they should remain connected to their originating business process.
+35. Consolidated Change List
+The following should be treated as the primary implementation backlog from Haroon's review:
+#
+Area
+Required Update
+Priority
+1
+Raise a Case
+Enable cross-team case/request routing
+High
+2
+Cross-Team Communication
+Add back-and-forth communication
+High
+3
+Acknowledgement
+Track first response within 24 hours
+High
+4
+Escalation
+Escalate when response is missed
+High
+5
+Priority
+Add configurable priority levels
+High
+6
+TAT/SLA
+Separate Priority from TAT/SLA
+High
+7
+Visit
+Support multiple structured findings
+High
+8
+Visit Evidence
+Attach pictures, reports, video and documents
+High
+9
+Visit → RFI
+Assign individual findings to relevant teams
+High
+10
+Historical Data
+Show previous visit/finding history
+High
+11
+Project
+Rename "Open a Project" to "Add a Project"
+Medium
+12
+Decisions
+Add TAT and due-date visibility
+High
+13
+Daily Actions
+Add "What should I do today?" view
+High
+14
+Lessons Learned
+Implement dedicated Lessons Learned functionality
+High
+15
+Lessons Learned
+Push visibility to Heads and Audit
+High
+16
+Learning
+Create Learning Summary page
+High
+17
+Root Cause
+Capture why TAT/SLA took too long
+High
+18
+Departments
+Expand discipline/department list, including Legal
+Medium
+19
+Collaboration
+Support cross-module/system collaboration
+High
+20
+Senior Management
+Enable senior-level cross-department collaboration
+High
+21
+Executive View
+Add department-level overview/facts
+High
+22
+Executive View
+Add workload/department bifurcation
+High
+23
+Site Compliance
+Attach evidence to non-compliance
+High
+24
+PM/Asana
+Account for existing PM/Asana workflow
+Medium
+25
+Cross-Team Tasks
+Change relevant SLA terminology to TAT
+Medium
+26
+SLA Baseline
+Resolve baseline discrepancy
+Critical
+27
+Workflow Catalogue
+Consolidate all workflows
+Critical
+28
+Project Stage Matrix
+Show stage timing through heatmap
+High
+29
+Delay Analysis
+Separate internal vs external waiting
+High
+30
+Time Definitions
+Define Wait, Hold, In Progress
+Critical
+31
+Own Time
+Clarify relationship with Hold/Blocking Time
+Critical
+32
+Delivery Cycle
+Refine calculation logic
+Critical
+33
+MD Approval
+Exclude MD approval from Delivery Time
+High
+34
+Approval Inbox
+Strengthen action-oriented information
+Medium
+35
+Coordination Ledger
+Show who is waiting on whom
+High
+36
+Task Management
+Link tasks to originating workflows
+High
+36. Items Requiring Definition Before Final Development
+The following points should not be hard-coded until the business definition is confirmed:
+A. 24-Hour Acknowledgement
+Confirm whether the 24-hour period means:
+Calendar hours
+Business hours
+Working days/hours
+B. Priority Levels
+Confirm the exact priority structure, for example:
+Critical
+High
+Medium
+Low
+and the rules for changing priority.
+C. SLA vs TAT
+Establish exactly where SLA applies and where TAT applies.
+D. Wait / Hold / In Progress
+Create formal definitions and calculation rules.
+E. Own Time
+Confirm whether Own Time represents active execution time or another metric.
+F. Delivery Time
+Confirm all exclusions from Delivery Time, including MD approval and other approval/dependency periods.
+G. SLA Baseline
+Resolve the identified discrepancy before locking the baseline.
+H. Workflow Catalogue
+Consolidate and validate all workflows before using the catalogue as the final development baseline.
+37. Target Operating Model Emerging from the Meeting
+The overall direction from the review is that ZD should evolve from being primarily a request/task tracking system into a connected operational coordination and accountability platform.
+The intended model is:
+Request / Issue / Visit / Project Activity
+↓
+Structured Workflow
+↓
+Responsible Team
+↓
+TAT + Priority + SLA
+↓
+Communication / Collaboration
+↓
+Escalation where required
+↓
+Resolution / Approval
+↓
+Historical Record
+↓
+Performance Measurement
+↓
+Lesson Learned
+↓
+Management Insight / Process Improvement
+This should be the guiding architecture for the next design and development iteration.
+38. Immediate Next Steps
+Priority 1 — Business Definitions
+Finalize:
+SLA baseline
+TAT definitions
+Priority model
+Wait definition
+Hold definition
+In-progress definition
+Own Time
+Delivery Time
+MD approval exclusion
+Priority 2 — Workflow Catalogue
+Consolidate all workflows and establish their:
+Stages
+Roles
+TAT
+SLA
+Priority
+Escalation
+Dependencies
+Outputs
+Priority 3 — Collaboration
+Implement the cross-team collaboration model covering:
+Case
+Task
+RFI
+Communication
+Acknowledgement
+Escalation
+Senior-management involvement
+Priority 4 — Visit Management
+Redesign Visit Findings around:
+Visit → Multiple Findings → Evidence → Responsible Team → RFI/Task → Resolution → History
+Priority 5 — Lessons Learned
+Build:
+Lesson Learned → Root Cause → Improvement → Head Visibility → Audit Visibility → Learning Summary
+Priority 6 — Executive & Operational Views
+Strengthen:
+Executive View
+Decisions Waiting on You
+What Should I Do Today?
+Project Stage Matrix
+Project Insights
+Coordination Ledger
+Delivery Cycle
+Final Design Principle
+The system should make it immediately clear:
+What needs to be done, who needs to do it, who is waiting on whom, how long it has taken, what is blocking it, what its priority is, whether the TAT/SLA is being met, and what the organisation can learn from the outcome.

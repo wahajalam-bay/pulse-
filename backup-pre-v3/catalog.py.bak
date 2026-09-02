@@ -1,0 +1,644 @@
+#!/usr/bin/env python3
+"""ZD Arch & Design — the workflow catalog, transcribed from the source documents.
+
+WHAT THIS IS
+  Volume 1 of the Design Workflow Booklet defines 39 workflows across four teams
+  (Architecture, MEP, Structure, Creative) as ~277 ordered process steps, each with
+  a duration, a lane (who does it), and — in the swimlanes — maker/checker marks and
+  "Changes Required" rework arrows.
+
+  This module is that book as data. Everything downstream (plans, tasks, the SLA
+  baseline, the stage matrix) is derived from here, so the booklet is the single
+  source of truth rather than something a person retypes into a sheet.
+
+THE TWO TAT SOURCES, AND WHY BOTH ARE KEPT
+  The Design & Architecture Guidelines Manual §4.0 also publishes an overall TAT per
+  stage, and it DISAGREES with the booklet on 6 of the 10 architecture stages. It
+  also disagrees with its own embedded flowcharts on Stages 5, 11 and 12. The worst
+  case is Design Schematics: the same flowchart is captioned "8-9 Weeks" in the
+  booklet and "4-6 Weeks" in the Manual.
+
+  We do not silently pick a winner. Both are stored (`tat_booklet`, `tat_manual`) and
+  a workflow where they differ is flagged. The dashboard shows the conflict rather
+  than hiding it, because an SLA nobody agrees on is worse than no SLA. Ahmed Khan
+  rules on which is canonical; `TAT_SOURCE` below is the one switch that applies it.
+
+ON `None` DURATIONS
+  Topographical Survey and In-house Structural Stability Ownership have a completely
+  blank duration column in the booklet. Several steps are marked "*" (variable —
+  depends on an external party) or "same day". None means genuinely unknown and is
+  rendered as "—", never as zero, because a zero would quietly deflate every rollup.
+
+FLAGS
+  M  maker      the step has a maker mark in the swimlane
+  C  checker    the step has a checker mark — a review/decision point
+  R  rework     a "Changes Required" arrow leaves this step and loops back
+  X  external   duration depends on a party outside ZD (the "*" in the booklet)
+  G  gate       nothing downstream may start until this closes
+"""
+
+# The one switch. "booklet" | "manual" — which overall TAT is the SLA baseline.
+# Until Ahmed rules, the booklet wins: its per-step durations are the only ones that
+# actually sum, so it is the only source that can be validated against itself.
+TAT_SOURCE = "booklet"
+
+# ── the spine ────────────────────────────────────────────────────────────────
+# Three phases. The Manual numbers the design stages 3-12; §3 covers acquisition
+# (stages 1-2) and §§5-18 cover construction support, which has no stage number at
+# all but is unambiguously this department's work and runs for years. So the spine
+# carries 1-2 and 13 explicitly rather than leaving the team invisible either side
+# of the design window.
+STAGES = [
+    (1,  "Data Gathering",          "A", "Intake from Acquisition / Legal / Sales"),
+    (2,  "Feasibility & Approval",  "A", "EPC vs IRR, management gate"),
+    (3,  "Design Schematics",       "B", "Site, bylaws, zoning, concept, massing"),
+    (4,  "Internal Coordination",   "B", "Column grid and MEP services into the layout"),
+    (5,  "Design Development",      "B", "Layouts, elevations, sections, inventory"),
+    (6,  "3D Development",          "B", "Modelling, rendering, 4K exteriors"),
+    (7,  "Authority Submission",    "B", "LDA submission and feedback"),
+    (8,  "Mood Board",              "B", "Theme and material direction"),
+    (9,  "Marketing Collateral",    "B", "Sales kit, renders, brochure, logo"),
+    (10, "Tender Drawings",         "B", "Enough detail for contractors to bid"),
+    (11, "IFC Phase I & II",        "B", "Issued for construction — grey structure"),
+    (12, "IFC Phase III",           "B", "Interiors and finishing"),
+    (13, "Construction Support",    "C", "RFIs, MAR, shop drawings, sampling, site visits"),
+    (14, "Closeout & Handover",     "C", "As-built, O&M handover, archive, lessons learned"),
+]
+PHASES = {"A": "Acquisition", "B": "Design", "C": "Construction Support"}
+
+TEAMS = ["Architecture", "Structure", "MEP", "Creative"]
+
+# Lanes that are NOT one of the four teams. Work is attributed to them and they
+# hold the clock, but they never sign in — exactly the pattern PULSE already uses
+# for its approval departments. Splitting these out is what makes "waiting on
+# someone else" measurable instead of being charged to the team as idle time.
+EXTERNAL_LANES = [
+    "PM", "Supply Chain", "Finance", "Legal", "Property Mgmt", "CPML",
+    "Call Center", "Production", "Design Team", "Third Party Vendor",
+    "Authority", "Zameen Studios", "Bayut", "Stakeholders", "Higher Management",
+    "Contractor", "QA/QC", "CFT", "Audit", "Head ZD", "Acquisition",
+]
+
+# ── the catalog ──────────────────────────────────────────────────────────────
+# (team, workflow, stage, tat_booklet, tat_manual, [ (seq, step, days, lane, flags) ])
+# days: int | None.  lane: "" means the owning team.
+
+CATALOG = [
+
+# ═══════════════ ARCHITECTURE — 10 workflows ═══════════════
+("Architecture", "Design Schematics", 3, "8-9 Weeks", "4-6 Weeks", [
+    (1, "Site Analysis", 1, "", ""),
+    (2, "By Laws Assessment", 1, "", ""),
+    (3, "Zoning", 3, "", ""),
+    (4, "Conceptual Planning", 14, "", ""),
+    (5, "Initial Coordination (Structure)", 1, "Structure", ""),
+    (6, "3D Conceptual Massing", 7, "", ""),
+    (7, "Area Calculation / Inventory Mix", 3, "", "M"),
+    (8, "Conceptual Design Presentation", 3, "", "M"),
+    (9, "Feedback & Revision from Stakeholders", 10, "Stakeholders", "CRX"),
+]),
+("Architecture", "Internal Coordination MEP & Structure", 4, "3 Weeks", "3 Weeks", [
+    (1, "Initial Architecture conceptual layout shared", 1, "", ""),
+    (2, "Initial feedback: column grid and beam drop", 7, "Structure", ""),
+    (3, "Initial feedback: services and ducts", 3, "MEP", ""),
+    (4, "Incorporation of feedback in Architecture layouts", 7, "", "C"),
+]),
+("Architecture", "Design Development", 5, "9 Weeks", "8-10 Weeks", [
+    (1, "Basement layout with services", 4, "", ""),
+    (2, "Single line internal layout plans", 5, "", ""),
+    (3, "Coordination with Structure & MEP", 5, "Structure", "C"),
+    (4, "Detail internal layout plans with furniture", 10, "", "M"),
+    (5, "Initial 3D Development", 10, "", "M"),
+    (6, "Elevations & Sections", 7, "", "C"),
+    (7, "Coordination for revision (Structure)", 2, "Structure", "C"),
+    (8, "Inventory Mix & Area Calculations", 3, "", "M"),
+    (9, "Final Design Presentation", 3, "", "M"),
+    (10, "Feedback & Revision from Stakeholders", 10, "Stakeholders", "CRX"),
+]),
+("Architecture", "3D Development", 6, "8 Weeks", "8 Weeks", [
+    (1, "3D Modeling as per Final Design", 7, "", "M"),
+    (2, "3D Rendering, Texturing & Environment Building", 7, "", ""),
+    (3, "Shared with Stakeholders for Feedback", 5, "Stakeholders", "CR"),
+    (4, "Coordination of Architecture Design & 3D", 7, "", "C"),
+    (5, "Final Renders of 3D Exterior (4K)", 14, "Zameen Studios", "X"),
+]),
+("Architecture", "Authority Submission", 7, "10 Weeks", "10 Weeks", [
+    (1, "Floor Plans finalization for authority", 7, "", ""),
+    (2, "Elevations & Sections drawings", 7, "", ""),
+    (3, "Coordination (Structure & MEP)", 2, "Structure", "C"),
+    (4, "Incorporation of MEP & Structure in Architecture plans", 2, "", ""),
+    (5, "Area Calculations", 2, "", ""),
+    (6, "Formatting of Sheets", 7, "", "M"),
+    (7, "Printing, sign-stamp of sheets, authority letters", 4, "", "M"),
+    (8, "Feedback & Coordination with the Authority", None, "Authority", "CRX"),
+    (9, "Drawings forwarded to PM for Preliminary BOQ", 1, "PM", "G"),
+]),
+("Architecture", "ZD Mood Board", 8, "1 Week", "1-2 Weeks", [
+    (1, "Research of theme", 1, "", ""),
+    (2, "Reference research of spaces", 2, "", ""),
+    (3, "Compilation of Research", 2, "", "M"),
+    (4, "Feedback from Stakeholders", 2, "Stakeholders", "CR"),
+]),
+("Architecture", "Marketing Collateral", 9, "13-14 Weeks", "13-14 Weeks", [
+    (1, "Mood board and AutoCAD files shared", 1, "", ""),
+    (2, "Exterior Renders", 7, "Zameen Studios", "X"),
+    (3, "Interior Renders", 30, "Zameen Studios", "X"),
+    (4, "Isometrics", 30, "Bayut", "X"),
+    (5, "Initial working of brochure & Logo", 5, "Creative", ""),
+    (6, "Coordination", 2, "", "CR"),
+    (7, "Feedback on Renders from Stakeholders", 10, "Stakeholders", "CRX"),
+    (8, "Final Logo & All Renders", 3, "", "M"),
+    (9, "Sales kit (2D Apartment plans)", 10, "", ""),
+    (10, "Sales Kit (Entire Floor plans)", 7, "", ""),
+    (11, "Final Sales Kit", 5, "", "M"),
+    (12, "Agreement sheets", 14, "", "M"),
+    (13, "Brochure", 14, "Creative", ""),
+]),
+("Architecture", "Tender Drawings", 10, "8 Weeks", "8-9 Weeks", [
+    (1, "Detailed Architectural plans, Sections & Elevations", 30, "", ""),
+    (2, "Initial Tender Drawings shared with MEP & Structure", 1, "Structure", ""),
+    (3, "MEP & Structure Tender drawings", 40, "Structure", ""),
+    (4, "Detail Door window Schedule", 2, "", ""),
+    (5, "Initial Finishing Schedule", 2, "", ""),
+    (6, "Coordination of Architecture plans with MEP & Structure", 6, "Structure", "MR"),
+    (7, "Revision of Detail Architectural plans", 5, "", ""),
+    (8, "Final Tender Drawing", 2, "", "C"),
+    (9, "Tender Drawings forwarded to PM for BOQ", 1, "PM", "G"),
+]),
+("Architecture", "IFC Phase I & II", 11, "9-10 Weeks", "11-12 Weeks", [
+    (1, "Detailed Working Architectural plans, Sections & Elevations", 40, "", ""),
+    (2, "Initial drawings shared with MEP & Structure", 1, "Structure", ""),
+    (3, "MEP & Structure IFC Phase 1 & 2 drawings", 30, "Structure", ""),
+    (4, "Detail Door window Schedule", 4, "", ""),
+    (5, "Detail Finishing Schedule", 2, "", ""),
+    (6, "Coordination of Architecture plans with MEP & Structure", 6, "Structure", "MR"),
+    (7, "Revision of Detail Architectural plans", 5, "", ""),
+    (8, "Final IFC 1 & 2 Drawing", 2, "", "C"),
+    (9, "IFC Phase 1 & 2 forwarded to PM Team", 1, "PM", "G"),
+]),
+("Architecture", "IFC Phase III", 12, "16 Weeks", "12-14 Weeks", [
+    (1, "Detailed interior working drawings — apartment bedroom", 15, "", ""),
+    (2, "Coordination of architectural drawings with MEP", 20, "MEP", ""),
+    (3, "Interior working drawings — bath and kitchen", 15, "", ""),
+    (4, "Interior working drawings — apartment lounges", 10, "", ""),
+    (5, "Interior working drawings — corridors", 15, "", ""),
+    (6, "Interior working drawings — common spaces", 15, "", "M"),
+    (7, "Final Architecture drawing set Phase 3", None, "", "M"),
+    (8, "IFC Phase 3 drawings for review to PM", 10, "PM", "C"),
+    (9, "IFC Phase 3 Drawings forwarded to PM Team", 1, "PM", "G"),
+    (10, "Handing over Drawings to Supply Chain Team", 1, "Supply Chain", "G"),
+]),
+
+# ═══════════════ MEP — 5 workflows ═══════════════
+("MEP", "MEP Space Planning", 4, "9 Days", None, [
+    (1, "MEP systems selection / requirements received", 1, "Architecture", ""),
+    (2, "Preliminary calculations for MEP spaces", 2, "", ""),
+    (3, "Incorporation of MEP spaces (project & lead engineer)", 1, "", ""),
+    (4, "Drafting of MEP space plans", 1, "", "M"),
+    (5, "Review by Project Design Engineer", 1, "", "CR"),
+    (6, "Coordination between mechanical, electrical and plumbing", 1, "", ""),
+    (7, "Analysis by Lead Engineer", 1, "", "CR"),
+    (8, "Review of MEP spaces by architectural team", 1, "Architecture", "C"),
+    (9, "Structural review of MEP spaces", 1, "Structure", "C"),
+]),
+("MEP", "Authority Submission", 7, "3 Weeks", None, [
+    (1, "Architectural drawings received", 1, "Architecture", ""),
+    (2, "Review of incorporated MEP spaces in architectural plans", 1, "", "CR"),
+    (3, "Identifying requirements by local authority", 1, "", ""),
+    (4, "Design as per local authority requirement", 2, "Architecture", ""),
+    (5, "Drafting of submission layouts", 8, "", "M"),
+    (6, "Review by Project Design Engineer", 1, "", "CR"),
+    (7, "Coordination between MEP systems", 1, "", ""),
+    (8, "Analysis by Lead Engineer", 1, "", "CR"),
+    (9, "Deliver to architecture team for authority submission", 1, "Architecture", "G"),
+]),
+("MEP", "Tender Drawings", 10, "8 Weeks", None, [
+    (1, "Tender drawings received from architecture team", 1, "Architecture", ""),
+    (2, "Comprehensive MEP calculations", 3, "", "CR"),
+    (3, "Design development by project & lead engineer", 4, "Architecture", ""),
+    (4, "Drafting of tender drawings", 18, "", "M"),
+    (5, "Review & value engineering by Project Design Engineer", 2, "", "CR"),
+    (6, "Analysis by Lead Engineer", 5, "", "CR"),
+    (7, "Quantify design elements for Bill of Quantities", 2, "", ""),
+    (8, "Preparation of MEP BOQ with technical specifications", 3, "", ""),
+    (9, "Compilation & review of tender document", 2, "", "C"),
+]),
+("MEP", "IFC Drawings", 11, "4 Weeks", None, [
+    (1, "Construction drawings received from architecture team", 1, "Architecture", ""),
+    (2, "Design development by project engineer", 2, "Architecture", ""),
+    (3, "Drafting of construction drawings", 10, "", "M"),
+    (4, "Review by Project Design Engineer", 2, "", "CR"),
+    (5, "Analysis by Lead Engineer", 1, "", "CR"),
+    (6, "Coordination between mechanical and electrical services", 3, "", ""),
+    (7, "Comprehensive coordination with Architecture and Structure", 2, "Architecture", "C"),
+]),
+("MEP", "Execution Phase", 13, "6 Days", None, [
+    (1, "Technical MARs of MEP items from Supply Chain", 1, "Supply Chain", ""),
+    (2, "RFIs from PM Team", 1, "PM", ""),
+    (3, "Shop drawings from PM Team", 2, "PM", ""),
+    (4, "Review & Respond", 2, "", "CR"),
+]),
+
+# ═══════════════ STRUCTURE — 12 workflows ═══════════════
+# NOTE: the booklet's process table for this workflow has a COMPLETELY BLANK
+# duration column. Every step below is None on purpose. Ahmed/Rashid must supply
+# them before this workflow can carry an SLA.
+("Structure", "Topographical Survey", 3, "1 Week", None, [
+    (1, "Site plan received from architectural team", None, "Architecture", ""),
+    (2, "TOR finalization", None, "", ""),
+    (3, "Request to assign surveyor to PM Team", None, "PM", ""),
+    (4, "Mobilization of surveyor at site", None, "PM", ""),
+    (5, "Submission of Topographical Survey Plans", None, "PM", "M"),
+    (6, "Review of Survey Plans by Structural Team", None, "", "CR"),
+    (7, "Coordination with other design departments", None, "", ""),
+]),
+("Structure", "Geotechnical Investigation", 3, "8-10 Weeks", None, [
+    (1, "Site plan submission received", 1, "Architecture", ""),
+    (2, "Demarcation of bore holes", 1, "", ""),
+    (3, "Vendor shortlisting", 7, "Supply Chain", ""),
+    (4, "Technical evaluation of vendor", 3, "", "CR"),
+    (5, "Vendor selection finalized", 1, "Supply Chain", ""),
+    (6, "Payment to finalized vendor", 14, "Finance", "X"),
+    (7, "Vendor mobilization to site", 7, "Finance", "X"),
+    (8, "Geotechnical analysis executed and reported", 28, "Third Party Vendor", "X"),
+    (9, "Evaluation of geotechnical report", 5, "", "CR"),
+    (10, "Signed and stamped report submitted to vendor", 3, "Third Party Vendor", ""),
+]),
+("Structure", "Design Criteria", 3, "1-2 Days", None, [
+    (1, "Decision of structural system", 1, "", "C"),
+    (2, "Gather analytic factors from Pakistan building codes", 1, "", ""),
+    (3, "Listing material properties", 1, "", "M"),
+    (4, "Listing live loads as per occupancy / usage", 1, "", ""),
+    (5, "Listing seismic zone / factors", 1, "", ""),
+    (6, "Calculation of load combinations", 1, "", ""),
+    (7, "Listing geotechnical parameters from report", 1, "", ""),
+    (8, "Vetting by lead engineer", 1, "", "CR"),
+]),
+("Structure", "Dead Load Calculation", 4, "1-2 Days", None, [
+    (1, "Detailed review of architectural drawings", 1, "Architecture", "C"),
+    (2, "Calculation of dead walls on maximum panels", 1, "", ""),
+    (3, "Marking of length of walls in CAD drawings", 1, "", "M"),
+    (4, "Calculation of wall load", 1, "", ""),
+    (5, "Calculation of finishes load", 1, "", ""),
+    (6, "Total superimposed load of partition and finishes", 1, "", ""),
+]),
+("Structure", "E-Tabs Modelling", 5, "4-5 Weeks", None, [
+    (1, "Defining material properties of concrete and steel", 2, "", ""),
+    (2, "Defining sectional properties", 1, "", ""),
+    (3, "Diaphragm rigidity", 1, "", ""),
+    (4, "Defining the mass source", 1, "", ""),
+    (5, "Consideration of P-Delta effects", 1, "", ""),
+    (6, "Detailed drafting per architectural layouts", 7, "", "M"),
+    (7, "Defining and assigning superimposed dead and live loads", 7, "", ""),
+    (8, "Defining manual calculated load combinations", 1, "", ""),
+    (9, "Detailed analysis and checking irregularities", 7, "", "CR"),
+    (10, "Design the structural members", 7, "", "CR"),
+    (11, "Design iterations", 1, "", ""),
+]),
+("Structure", "Design & Drawings Preparation", 5, "7-8 Weeks", None, [
+    (1, "Extracting design data — columns", 3, "", ""),
+    (2, "Extracting design data — shear walls", 7, "", ""),
+    (3, "Extracting design data — beams", 7, "", ""),
+    (4, "Extracting design data — slabs", 7, "", ""),
+    (5, "Manual design of other structural members", 3, "", ""),
+    (6, "Detailed drafting per architectural layouts", 21, "", "M"),
+    (7, "Checking of drawings", 7, "", "CR"),
+    (8, "Coordination with Architectural Team", 3, "Architecture", ""),
+]),
+("Structure", "SAFE Modelling", 5, "3-4 Weeks", None, [
+    (1, "Importing loads from ETABS for foundation design", 3, "", ""),
+    (2, "Defining service load combinations in SAFE", 1, "", ""),
+    (3, "Defining material properties", 1, "", ""),
+    (4, "Refining load patterns for the mat design", 1, "", ""),
+    (5, "Defining sectional properties", 1, "", ""),
+    (6, "Defining soil subgrade properties per geotech", 1, "", ""),
+    (7, "Drafting of model as per layouts", 3, "", "M"),
+    (8, "Assigning service live loads", 1, "", ""),
+    (9, "Detailed analysis and checking irregularities", 7, "", "CR"),
+    (10, "Design the mat", 7, "", "CR"),
+    (11, "Design iterations", 1, "", ""),
+    (12, "Drafting of drawings per design results", 1, "", ""),
+]),
+# NOTE: blank duration column in the booklet, same as Topographical Survey.
+("Structure", "In-house Structural Stability Ownership", 7, "1-2 Days", None, [
+    (1, "Detailed checking of the E-Tabs model", None, "", "CR"),
+    (2, "Checking of structural drawings", None, "", "CR"),
+    (3, "Printing of drawings", None, "", "M"),
+    (4, "Sign and stamp of drawings by structural manager", None, "", "M"),
+    (5, "Issuance of stability certificates for approval authority", None, "", "G"),
+]),
+("Structure", "Authority Submission of Vetted Drawings", 7, "5 Weeks", None, [
+    (1, "Raising demand of cheque as per covered area", 1, "", ""),
+    (2, "Preparation of cheque", 7, "Supply Chain", "M"),
+    (3, "Vendor payment", 7, "Finance", "X"),
+    (4, "Submission of detailed design criteria / calculation / drawings", 7, "", "CR"),
+    (5, "Signed and stamped drawings for authority approval", 7, "Third Party Vendor", "X"),
+    (6, "Submission of structural drawings to concerned authority", 3, "Authority", "G"),
+]),
+("Structure", "Tendering Package", 10, "8 Weeks", None, [
+    (1, "Reviewing the architectural drawings issued for tender", 3, "Architecture", ""),
+    (2, "Review of ETABs model", 3, "", "CR"),
+    (3, "Updating E-Tabs model and revising the analysis", 7, "", ""),
+    (4, "Designing the frame after updating the model", 7, "", ""),
+    (5, "Communicating changes to draftsman / drawing drafting", 21, "", "M"),
+    (6, "Checking the structural drawings", 7, "", "CR"),
+    (7, "Coordinating structural drawings to Architecture for review", 3, "Architecture", ""),
+    (8, "Submission of drawings for BOQ and tender", 1, "PM", "G"),
+]),
+("Structure", "IFC Drawings Compilation", 11, "8 Weeks", None, [
+    (1, "Detailed study of architectural drawings issued for construction", 3, "Architecture", ""),
+    (2, "Review of ETABs model", 3, "", "CR"),
+    (3, "Updating E-Tabs model and revising the analysis", 7, "", ""),
+    (4, "Designing the frame after updating the model", 7, "", ""),
+    (5, "Communicating changes to draftsman / drawing drafting", 21, "", "M"),
+    (6, "Checking the structural drawings", 7, "", "CR"),
+    (7, "Coordinating structural drawings to Architecture for review", 3, "Architecture", ""),
+    (8, "Issuance of construction drawings", 1, "PM", "G"),
+]),
+("Structure", "RFIs Tracking and Management", 13, "1-2 Days", None, [
+    (1, "Detailed discussion with Construction Manager", 1, "PM", ""),
+    (2, "Incorporating the details in specific drawings", 1, "", "CR"),
+    (3, "Coordination with other departments", 1, "Stakeholders", ""),
+    (4, "Response of RFI via updated drawings", 1, "", ""),
+]),
+
+# ═══════════════ CREATIVE — 12 workflows ═══════════════
+# Stage 0 == business as usual: recurring work with no project to attach to.
+# Seven of Creative's twelve workflows are BAU. See store.py's BAU project note.
+("Creative", "Digital Content Creation", 0, "5 Days", None, [
+    (1, "Competitive research", 1, "", ""),
+    (2, "Updating the content calendar weekly", 2, "", "M"),
+    (3, "Content review", 1, "", "C"),
+    (4, "Content calendar sent in for design", 3, "Design Team", ""),
+    (5, "Scheduling posts — Facebook, LinkedIn, YouTube", 1, "", ""),
+    (6, "Community management", 1, "", ""),
+]),
+("Creative", "Construction Updates", 13, "1 Week", None, [
+    (1, "Email to production team with timelines", 1, "PM", ""),
+    (2, "Site visit & shoot", 1, "Production", "M"),
+    (3, "Raw footage review & pointers", 1, "", "C"),
+    (4, "Technical information gathering from Project Management", 2, "PM", ""),
+    (5, "Footage with complete data shared to production team", 1, "Production", ""),
+    (6, "Video & photography package", 2, "", ""),
+    (7, "Execution — social, website, internal platforms", 2, "", ""),
+]),
+("Creative", "Digital Campaigns", 0, "6-7 Weeks", None, [
+    (1, "Goal of campaign & research", 1, "", ""),
+    (2, "Creation of content calendar for the month", 7, "", "M"),
+    (3, "Content shared with head for approval", 1, "", "C"),
+    (4, "Content shared for designing", 21, "Design Team", ""),
+    (5, "Campaign shared with CPML team", 1, "CPML", ""),
+    (6, "Scheduling posts — YouTube, LinkedIn, Facebook", 1, "", ""),
+    (7, "CPML team boosts the post", 1, "CPML", ""),
+    (8, "Community management", 2, "", ""),
+    (9, "Lead conversion", 1, "Call Center", "X"),
+    (10, "Contacting interested leads", 1, "", ""),
+    (11, "Lead shared with Architecture team", 1, "Architecture", ""),
+]),
+("Creative", "Marketing Collaterals", 9, "7 Days", None, [
+    (1, "Request generated by Architecture team", 1, "Architecture", ""),
+    (2, "Project marketing planner", 1, "", "M"),
+    (3, "Content writing", 3, "", ""),
+    (4, "Content shared with head for approval", 4, "Design Team", "CR"),
+    (5, "Approved content provided for design", 1, "", ""),
+]),
+("Creative", "Zameen Times", 0, "6 Days", None, [
+    (1, "First week of every month", 1, "", ""),
+    (2, "Deciding the sections", 1, "", ""),
+    (3, "Content writing", 3, "", "M"),
+    (4, "Content shared with manager for approval", 1, "", "CR"),
+    (5, "Newsletter designing", 2, "", ""),
+    (6, "Newsletter proofreading", 1, "", "CR"),
+    (7, "Design shared with head for approval", 1, "", "C"),
+    (8, "Approved design shared with Zameen Times team", 1, "", ""),
+]),
+("Creative", "News & Blog Writing", 0, "9 Days", None, [
+    (1, "Request generated by CPML or Central Content Team", 1, "CPML", ""),
+    (2, "Collection of information", 2, "", ""),
+    (3, "Writing news or blog piece", 2, "", "M"),
+    (4, "Proofreading", 1, "", "C"),
+    (5, "Approval from HOD", 1, "", "CR"),
+    (6, "Feedback incorporated", 1, "", ""),
+    (7, "Content shared with CPML team", 1, "CPML", ""),
+]),
+("Creative", "Project Identity", 3, "1 Week", None, [
+    (1, "Request generated by Architecture team", 1, "Architecture", ""),
+    (2, "Collection of concept information", 1, "", ""),
+    (3, "List of names with brief explanation", 1, "", "M"),
+    (4, "Approval by HOD", 1, "", "C"),
+    (5, "Logo designing", 2, "", ""),
+    (6, "Shared with HOD", 1, "", "CR"),
+    (7, "Shared with higher management", 3, "Higher Management", "CR"),
+]),
+("Creative", "ZD Website Functions", 0, "5 Days", None, [
+    (1, "New project / construction update", 1, "", ""),
+    (2, "Content for new project", 2, "", "M"),
+    (3, "Data compilation — plans and renders", 1, "Architecture", ""),
+    (4, "Data check", 1, "", "C"),
+    (5, "Content uploading", 1, "", ""),
+    (6, "Content management", 1, "", ""),
+]),
+("Creative", "ZD Proposal Templates", 0, "7 Days", None, [
+    (1, "Content or mock presentation received", 1, "Architecture", ""),
+    (2, "Designing of a template / theme", 1, "", "M"),
+    (3, "Approval of theme", 1, "", "CR"),
+    (4, "Designing / formatting the presentation deck", 4, "", "M"),
+    (5, "Approval / feedback incorporated", 1, "", "CR"),
+]),
+("Creative", "Corporate Branding", 0, "5 Days", None, [
+    (1, "Request received by concerned team", 1, "", ""),
+    (2, "Content for branding", 1, "", "M"),
+    (3, "Designing", 2, "", "M"),
+    (4, "Approval from the concerned team", 2, "", "C"),
+    (5, "Approval / feedback incorporated", 2, "", "C"),
+]),
+("Creative", "Project Collaterals", 9, "2 Weeks", None, [
+    (1, "Project identity", 1, "", ""),
+    (2, "Content writing", 3, "", "M"),
+    (3, "Data collection — renders, floor plans, isometrics", 1, "Architecture", ""),
+    (4, "Collateral design", 7, "", ""),
+    (5, "Shared for approval", 2, "", "CR"),
+    (6, "Coordination with CPML team", 1, "CPML", ""),
+    (7, "Coordination / costing with procurement", 2, "Supply Chain", ""),
+    (8, "Artworks management / transferring", 1, "", ""),
+]),
+("Creative", "Designing Legal Documents", 0, "8 Days", None, [
+    (1, "Request generated by Property Management team", 1, "Property Mgmt", ""),
+    (2, "Content development by Legal team", 1, "Legal", "M"),
+    (3, "Designing of booklet", 2, "", "M"),
+    (4, "Feedback / changes incorporated", 1, "", "C"),
+    (5, "Data compilation — plans and renders", 1, "Architecture", ""),
+    (6, "Coordination with procurement", 1, "Supply Chain", ""),
+    (7, "Coordination with vendor", 1, "Third Party Vendor", ""),
+    (8, "Artworks management and transferring to vendor", 1, "", ""),
+]),
+
+# ═══════════════ FROM THE GUIDELINES MANUAL, NOT THE BOOKLET ═══════════════
+# Volume 1 of the booklet stops at the drawing. These seven workflows are the
+# department's own Manual sections that the booklet never drew a swimlane for —
+# and they cover where a project spends its last three years. Stage 13 used to be
+# one label carrying everything from an RFI to a handover, which is exactly why it
+# read as a dead end. Each entry carries its section number as `source`, so the
+# provenance stays honest: transcribed from the Manual's prose, not a swimlane.
+
+("Architecture", "Value Engineering", 10, "3-4 Weeks", None, [
+    (1, "VE trigger — tender cost over approved budget", 1, "PM", "X"),
+    (2, "VE workshop with Structure, MEP and QS", 2, "", "M"),
+    (3, "Option study — specification, system and layout alternates", 7, "", "M"),
+    (4, "Structural implication check", 3, "Structure", "C"),
+    (5, "MEP implication check", 3, "MEP", "C"),
+    (6, "QS cost comparison per option", 5, "PM", "CX"),
+    (7, "VE proposal pack issued to CFT", 2, "", "M"),
+    (8, "CFT review and shortlist", 3, "CFT", "CRX"),
+    (9, "Head ZD decision on adopted options", 2, "Head ZD", "CG"),
+    (10, "Incorporation into tender drawings and BOQ", 7, "", "M"),
+], "Design Manual \u00a78"),
+
+("Architecture", "BOQ Endorsement", 10, "2 Weeks", None, [
+    (1, "Tender drawing set released to PM", 1, "", ""),
+    (2, "QS quantity take-off and BOQ preparation", 10, "PM", "X"),
+    (3, "Architecture quantity and specification check", 3, "", "C"),
+    (4, "Structure quantity check", 3, "Structure", "C"),
+    (5, "MEP quantity check", 3, "MEP", "C"),
+    (6, "Discrepancy log returned to QS", 2, "PM", "RX"),
+    (7, "Head ZD endorsement of BOQ", 2, "Head ZD", "CG"),
+    (8, "Endorsed BOQ released to Supply Chain for tender", 1, "Supply Chain", "GX"),
+], "Design Manual \u00a710"),
+
+("Architecture", "Finishing Items & Sampling", 12, "6 Weeks", None, [
+    (1, "Finishing schedule per inventory type", 5, "", "M"),
+    (2, "Sample call issued to contractor", 1, "Contractor", ""),
+    (3, "Sample receipt and register entry", 3, "Contractor", "X"),
+    (4, "Design review against the approved mood board", 3, "", "C"),
+    (5, "Mock-up unit construction", 14, "Contractor", "X"),
+    (6, "Joint mock-up inspection with QA/QC", 2, "QA/QC", "CX"),
+    (7, "Approval or rejection with a recorded reason", 2, "", "CR"),
+    (8, "Entry in the annual approved-material archive", 1, "", "G"),
+], "Design Manual \u00a712"),
+
+("Architecture", "QA/QC Site Coordination", 13, "Continuous", None, [
+    (1, "QA/QC raises a site observation against IFC", 1, "QA/QC", "X"),
+    (2, "Design assessment — deviation or acceptable", 2, "", "C"),
+    (3, "Classification as NCR, RFI or design change", 1, "", "C"),
+    (4, "Corrective design instruction issued", 3, "", "M"),
+    (5, "Contractor rectification on site", None, "Contractor", "X"),
+    (6, "Joint re-inspection", 2, "QA/QC", "CX"),
+    (7, "NCR close-out and register update", 1, "", "G"),
+], "Design Manual \u00a716"),
+
+("Architecture", "Regulatory Inspection Support", 13, "2-3 Weeks", None, [
+    (1, "Inspection notice received from the authority", 1, "Authority", "X"),
+    (2, "Compile the approved drawing set and NOC file", 3, "", "M"),
+    (3, "Structure and MEP compliance inputs", 3, "Structure", "C"),
+    (4, "Site walk with the authority inspector", 1, "Authority", "X"),
+    (5, "Observations register and gap analysis", 2, "", "C"),
+    (6, "Compliance response and rectification drawings", 5, "", "MR"),
+    (7, "Completion / occupancy certificate issued", None, "Authority", "GX"),
+], "Design Manual \u00a717"),
+
+("Architecture", "Project Closeout & As-Built", 14, "8 Weeks", None, [
+    (1, "As-built markups received from contractor", None, "Contractor", "X"),
+    (2, "Architecture as-built compilation", 15, "", "M"),
+    (3, "Structure as-built compilation", 10, "Structure", "M"),
+    (4, "MEP as-built compilation", 10, "MEP", "M"),
+    (5, "Design verification against site condition", 5, "", "C"),
+    (6, "QA/QC concurrence on the as-built set", 3, "QA/QC", "CX"),
+    (7, "As-built transmittal to PM and Property Management", 2, "PM", "GX"),
+    (8, "O&M manuals and warranty pack handover", 5, "PM", "X"),
+    (9, "Drawing archive and register closure", 2, "", "G"),
+], "Design Manual \u00a718"),
+
+("Architecture", "Lessons Learned Review", 14, "1 Week", None, [
+    (1, "Collect LLR entries raised through the project", 1, "", ""),
+    (2, "Discipline review — Architecture, Structure, MEP", 2, "", "C"),
+    (3, "Root cause and repeat-risk assessment", 2, "", "M"),
+    (4, "Ruling by Head ZD on the adopted lessons", 1, "Head ZD", "C"),
+    (5, "Promotion into stage checklists and standards", 1, "", "G"),
+], "Design Manual \u00a77.6 \u00b7 PM Manual \u00a78.3 defines a competing process \u2014 unarbitrated"),
+]
+
+
+BOOKLET = "Design Workflow Booklet Vol.1"
+
+
+def _unpack(entry):
+    """A catalog entry is a 6-tuple (booklet) or a 7-tuple (Manual-sourced).
+
+    Kept variadic rather than rewriting all 39 booklet entries, so the change that
+    added the Manual workflows does not touch a single transcribed line.
+    """
+    team, wf, stage, tb, tm, steps = entry[:6]
+    return team, wf, stage, tb, tm, steps, (entry[6] if len(entry) > 6 else BOOKLET)
+
+
+def flatten():
+    """One row per process step — what the importer writes to `products`."""
+    out = []
+    for entry in CATALOG:
+        team, wf, stage, tb, tm, steps, source = _unpack(entry)
+        for seq, name, days, lane, flags in steps:
+            out.append({
+                "team": team, "workflow": wf, "stage": stage,
+                "seq": seq, "step": name, "tat_days": days,
+                "lane": lane or team, "is_external": bool(lane and lane not in TEAMS),
+                "maker": "M" in flags, "checker": "C" in flags,
+                "rework": "R" in flags, "variable": "X" in flags, "gate": "G" in flags,
+                "tat_booklet": tb, "tat_manual": tm, "source": source,
+            })
+    return out
+
+
+def workflows():
+    """The catalog, one row per workflow — what the Workflow Catalog rail lists."""
+    out = []
+    for entry in CATALOG:
+        team, wf, stage, tb, tm, steps, source = _unpack(entry)
+        out.append({
+            "team": team, "workflow": wf, "stage": stage,
+            "tat_booklet": tb, "tat_manual": tm, "source": source,
+            "steps": len(steps),
+            "sum_days": sum(d for _s, _n, d, _l, _f in steps if d),
+            "unknown": sum(1 for _s, _n, d, _l, _f in steps if d is None),
+            "external": sum(1 for _s, _n, _d, l, _f in steps if l and l not in TEAMS),
+            "conflict": bool(tm and tb and tm.strip() != tb.strip()),
+        })
+    return out
+
+
+def conflicts():
+    """Workflows where the booklet and the Manual publish different overall TATs.
+
+    Surfaced on screen rather than resolved in code — see the module docstring.
+    """
+    out = []
+    for entry in CATALOG:
+        team, wf, stage, tb, tm, steps, _src = _unpack(entry)
+        if tm and tb and tm.strip() != tb.strip():
+            out.append({"team": team, "workflow": wf, "stage": stage,
+                        "booklet": tb, "manual": tm})
+    return out
+
+
+def stats():
+    rows = flatten()
+    return {
+        "workflows": len(CATALOG),
+        "from_booklet": sum(1 for w in workflows() if w["source"] == BOOKLET),
+        "from_manual": sum(1 for w in workflows() if w["source"] != BOOKLET),
+        "stations": len(STAGES),
+        "steps": len(rows),
+        "teams": len(TEAMS),
+        "external_steps": sum(1 for r in rows if r["is_external"]),
+        "rework_points": sum(1 for r in rows if r["rework"]),
+        "gates": sum(1 for r in rows if r["gate"]),
+        "unknown_tat": sum(1 for r in rows if r["tat_days"] is None),
+        "tat_conflicts": len(conflicts()),
+    }
+
+
+if __name__ == "__main__":
+    import json
+    print(json.dumps(stats(), indent=2))
+    print("\nTAT conflicts (booklet vs manual):")
+    for c in conflicts():
+        print(f"  Stage {c['stage']:>2}  {c['workflow']:<38} {c['booklet']:>12}  vs  {c['manual']}")

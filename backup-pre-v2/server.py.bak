@@ -1,0 +1,766 @@
+#!/usr/bin/env python3
+"""ZD PULSE — the service.
+
+Stdlib only, same shape as Bayut Studios PULSE: static files plus a small JSON API,
+one SQLite store, sessions as HMAC-signed tokens rather than a server-side table.
+
+  GET  <MOUNT>/...              static
+  POST <MOUNT>/api/login        sign in
+  GET  <MOUNT>/api/me           who am I
+  GET  <MOUNT>/api/bootstrap    everything the client needs in one payload
+  GET  <MOUNT>/api/matrix       the stage matrix — project x stage
+  GET  <MOUNT>/api/project/<id> one project in depth
+  GET  <MOUNT>/api/team/<name>  one team's performance
+  GET  <MOUNT>/api/tasks        filtered task list
+  POST <MOUNT>/api/task/start   |/finish |/revise
+  GET  <MOUNT>/api/cases        the approvals inbox
+  POST <MOUNT>/api/case/advance move a case along its route
+  GET  <MOUNT>/api/coordination the cross-team ledger
+  POST <MOUNT>/api/coordination/close
+  GET  <MOUNT>/api/obligations  recurring commitments and misses
+  GET  <MOUNT>/api/ledger       every action, filterable
+  GET  <MOUNT>/api/catalog      the booklet as data, incl. TAT conflicts
+  GET  <MOUNT>/api/health
+
+Run:  PORT=4010 MOUNT=/zd python server.py
+"""
+import http.server, json, os, sys, datetime, hmac, hashlib, base64, secrets, re
+
+import store, catalog, actions
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PORT = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else 4010))
+HOST = os.environ.get("HOST", "127.0.0.1")
+MOUNT = os.environ.get("MOUNT", "/zd").rstrip("/")
+USERFILE = os.path.join(HERE, "data", "users.json")
+SECFILE = os.path.join(HERE, "data", ".session-secret")
+PBKDF_ROUNDS = 200_000
+SESSION_DAYS = 7
+MAXBODY = 1024 * 1024
+ALLOW_DOMAINS = [d.strip().lower() for d in os.environ.get(
+    "ALLOW_DOMAINS", "zameen.com,bayut.sa,dubizzlelabs.com").split(",") if d.strip()]
+
+PRIVATE = {"server.py", "store.py", "catalog.py", "actions.py", "data", "logs",
+           "__pycache__", "PROJECT-MEMORY.md"}
+
+
+# ── auth ─────────────────────────────────────────────────────────────────────
+def _secret():
+    try:
+        with open(SECFILE, "rb") as f:
+            s = f.read().strip()
+            if s:
+                return s
+    except OSError:
+        pass
+    s = base64.urlsafe_b64encode(secrets.token_bytes(32))
+    os.makedirs(os.path.dirname(SECFILE), exist_ok=True)
+    with open(SECFILE, "wb") as f:
+        f.write(s)
+    return s
+
+
+def hash_pw(pw, salt=None):
+    salt = salt or secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), PBKDF_ROUNDS)
+    return salt, dk.hex()
+
+
+def verify_pw(pw, salt, want):
+    return hmac.compare_digest(hash_pw(pw, salt)[1], want)
+
+
+def load_users():
+    try:
+        with open(USERFILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_users(u):
+    with open(USERFILE, "w", encoding="utf-8") as f:
+        json.dump(u, f, indent=2)
+
+
+def seed_users():
+    """Accounts mirror the real org so the demo is recognisable.
+
+    Everyone shares one password for the review session — this is a local
+    walkthrough build, not a deployment. Rotate before this ever leaves a laptop.
+    """
+    if load_users():
+        return
+    demo_pw = "ZDesign!2026"
+    who = [
+        ("haroon@zameen.com", "Haroon Noon", "Head of Architecture & Design", "head", 0),
+        ("ahmed@zameen.com", "Ahmed Khan", "Sr. Manager Architecture", "manager", 1),
+        ("yahya@zameen.com", "Yahya Ali Khan", "Sr. Manager MEP", "manager", 1),
+        ("rashid@zameen.com", "Hafiz Rashid Khalid", "Sr. Manager Structure", "manager", 1),
+        ("ali@zameen.com", "Ali Aslam", "Creative Lead", "manager", 1),
+        ("umer@zameen.com", "Umer Farooq", "Architect", "lead", 2),
+        ("ashhad@bayut.sa", "Muhammad Ashhad", "BSE — Systems", "head", 0),
+    ]
+    users = {}
+    for email, name, desig, role, tier in who:
+        salt, h = hash_pw(demo_pw)
+        users[email] = {"name": name, "designation": desig, "role": role, "tier": tier,
+                        "salt": salt, "hash": h, "created": store.now(), "lastLogin": ""}
+    save_users(users)
+
+
+def make_token(email):
+    exp = int(datetime.datetime.now().timestamp()) + SESSION_DAYS * 86400
+    body = f"{email}|{exp}".encode()
+    sig = hmac.new(_secret(), body, hashlib.sha256).hexdigest()[:32]
+    return base64.urlsafe_b64encode(body).decode() + "." + sig
+
+
+def read_token(tok):
+    try:
+        b64, sig = tok.split(".", 1)
+        body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        if not hmac.compare_digest(
+                hmac.new(_secret(), body, hashlib.sha256).hexdigest()[:32], sig):
+            return None
+        email, exp = body.decode().rsplit("|", 1)
+        if int(exp) < datetime.datetime.now().timestamp():
+            return None
+        return email
+    except Exception:
+        return None
+
+
+def public_user(email, u):
+    return {"email": email, "name": u.get("name", ""), "role": u.get("role", "member"),
+            "designation": u.get("designation", ""), "tier": u.get("tier", 3)}
+
+
+# ── derivation ───────────────────────────────────────────────────────────────
+def task_view(r):
+    """Everything derived, on read. See store.py note 3."""
+    base = r["baseline_days"]
+    own, wait = r["own_days"] or 0, r["wait_days"] or 0
+    elapsed = own + wait
+    var = None if base is None else own - base   # SLA is judged on OWN time only
+    late = bool(base is not None and own > base)
+    return {
+        "id": r["id"], "project_id": r["project_id"], "team": r["team"],
+        "workflow": r["workflow"], "stage": r["stage"], "seq": r["seq"],
+        "title": r["title"], "lane": r["lane"], "external": bool(r["is_external"]),
+        "baseline": base, "own": own, "wait": wait, "elapsed": elapsed,
+        "variance": var, "late": late, "revision": r["revision"],
+        "status": r["status"], "planned_sd": r["planned_sd"], "planned_ed": r["planned_ed"],
+        "actual_sd": r["actual_sd"], "actual_ed": r["actual_ed"],
+        "person_id": r["person_id"],
+    }
+
+
+def age_days(iso):
+    if not iso:
+        return 0
+    return store.working_days_between(iso[:10], store.today().isoformat()) or 0
+
+
+class H(http.server.SimpleHTTPRequestHandler):
+    server_version = "ZDPULSE/1.0"
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, directory=HERE, **k)
+
+    def log_message(self, fmt, *a):
+        pass
+
+    # ── plumbing ──
+    def _json(self, code, obj):
+        b = json.dumps(obj, default=str).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(b)
+
+    def _body(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > MAXBODY:
+                return None
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception:
+            return None
+
+    def _who(self):
+        h = self.headers.get("Authorization") or ""
+        tok = h[7:].strip() if h.lower().startswith("bearer ") else ""
+        email = read_token(tok) if tok else None
+        if not email:
+            return None
+        u = load_users().get(email)
+        return dict(u, email=email) if u else None
+
+    def _strip(self):
+        if MOUNT and (self.path == MOUNT or self.path.startswith(MOUNT + "/")):
+            self.path = self.path[len(MOUNT):] or "/"
+            return True
+        return not MOUNT
+
+    def translate_path(self, path):
+        p = super().translate_path(path)
+        rel = os.path.relpath(p, HERE).replace("\\", "/")
+        if rel.split("/")[0] in PRIVATE:
+            return os.path.join(HERE, "__forbidden__")
+        return p
+
+    # ── routes ──
+    def do_GET(self):
+        if not self._strip():
+            self.send_error(404); return
+        p = self.path.split("?")[0]
+
+        if p == "/api/health":
+            return self._json(200, {"ok": True, "mount": MOUNT,
+                                    "catalog": catalog.stats()})
+        if p.startswith("/api/"):
+            return self._api_get(p)
+        if p == "/":
+            self.path = "/index.html"
+        return super().do_GET()
+
+    def _api_get(self, p):
+        who = self._who()
+        if not who:
+            return self._json(401, {"error": "Sign in to use ZD PULSE."})
+        c = store.conn()
+        try:
+            if p == "/api/me":
+                return self._json(200, {"ok": True, "user": public_user(who["email"], who)})
+
+            if p == "/api/bootstrap":
+                return self._json(200, self._bootstrap(c, who))
+
+            if p == "/api/matrix":
+                return self._json(200, self._matrix(c))
+
+            m = re.match(r"^/api/project/(\d+)$", p)
+            if m:
+                return self._json(200, self._project(c, int(m.group(1))))
+
+            m = re.match(r"^/api/team/(.+)$", p)
+            if m:
+                from urllib.parse import unquote
+                return self._json(200, self._team(c, unquote(m.group(1))))
+
+            if p == "/api/tasks":
+                return self._json(200, self._tasks(c))
+
+            if p == "/api/cases":
+                return self._json(200, self._cases(c))
+
+            if p == "/api/coordination":
+                return self._json(200, self._coord(c))
+
+            if p == "/api/obligations":
+                return self._json(200, self._oblig(c))
+
+            if p == "/api/ledger":
+                rows = c.execute("SELECT * FROM changes ORDER BY id DESC LIMIT 300").fetchall()
+                return self._json(200, {"rows": [dict(r) for r in rows]})
+
+            m = re.match(r"^/api/intake/(\d+)$", p)
+            if m:
+                pid = int(m.group(1))
+                r = c.execute("SELECT * FROM intake WHERE project_id=?", (pid,)).fetchone()
+                return self._json(200, {
+                    "fields": [{"key": k, "label": l, "source": src,
+                                "value": (r[k] if r else "") or ""}
+                               for k, l, src in actions.INTAKE_FIELDS],
+                    "updated_at": r["updated_at"] if r else None,
+                    "updated_by": r["updated_by"] if r else None})
+
+            m = re.match(r"^/api/checklist/(\d+)/(\d+)$", p)
+            if m:
+                pid, stage = int(m.group(1)), int(m.group(2))
+                cl = c.execute("SELECT * FROM checklists WHERE project_id=? AND stage=?",
+                               (pid, stage)).fetchone()
+                if not cl:
+                    c.execute("INSERT INTO checklists(project_id,stage,created_at) "
+                              "VALUES(?,?,?)", (pid, stage, store.now()))
+                    c.commit()
+                    cl = c.execute("SELECT * FROM checklists WHERE project_id=? AND stage=?",
+                                   (pid, stage)).fetchone()
+                items = [dict(x) for x in c.execute(
+                    "SELECT * FROM checklist_items WHERE checklist_id=? ORDER BY seq",
+                    (cl["id"],))]
+                return self._json(200, {"checklist": dict(cl), "items": items})
+
+            if p == "/api/drawings":
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                pid = int(q.get("project", [0])[0])
+                dw = [dict(x) for x in c.execute(
+                    "SELECT * FROM drawings WHERE project_id=? ORDER BY number", (pid,))]
+                tr = [dict(x) for x in c.execute(
+                    "SELECT * FROM transmittals WHERE project_id=? ORDER BY issued_at DESC",
+                    (pid,))]
+                return self._json(200, {"drawings": dw, "transmittals": tr})
+
+            if p == "/api/visits":
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                sql = ("SELECT v.*, p.name pname FROM site_visits v "
+                       "LEFT JOIN projects p ON p.id=v.project_id")
+                args = []
+                if q.get("project"):
+                    sql += " WHERE v.project_id=?"; args.append(int(q["project"][0]))
+                sql += " ORDER BY v.visited_on DESC LIMIT 100"
+                return self._json(200, {"rows": [dict(x) for x in c.execute(sql, args)]})
+
+            m = re.match(r"^/api/notes/([a-z]+)/(\d+)$", p)
+            if m:
+                rows = c.execute("SELECT * FROM notes WHERE entity=? AND entity_id=? "
+                                 "ORDER BY id DESC LIMIT 50", (m.group(1), int(m.group(2))))
+                return self._json(200, {"rows": [dict(x) for x in rows]})
+
+            if p == "/api/myqueue":
+                me = c.execute("SELECT * FROM people WHERE lower(email)=?",
+                               (who["email"].lower(),)).fetchone()
+                pid = me["id"] if me else -1
+                mine = [task_view(r) for r in c.execute(
+                    "SELECT * FROM tasks WHERE person_id=? AND status!='done' "
+                    "ORDER BY planned_ed LIMIT 60", (pid,))]
+                team = me["team"] if me else None
+                unass = [task_view(r) for r in c.execute(
+                    "SELECT * FROM tasks WHERE person_id IS NULL AND team=? "
+                    "AND is_external=0 AND status!='done' ORDER BY planned_ed LIMIT 40",
+                    (team,))] if team else []
+                cases = [dict(x) for x in c.execute(
+                    """SELECT ca.*, p.name pname FROM cases ca
+                       JOIN case_lanes l ON l.case_id=ca.id AND l.idx=ca.position
+                       LEFT JOIN projects p ON p.id=ca.project_id
+                       WHERE ca.status='open' AND l.is_stub=0 ORDER BY l.entered_at""")]
+                ob = [dict(x) for x in c.execute(
+                    "SELECT o.*, p.name pname FROM obligations o "
+                    "LEFT JOIN projects p ON p.id=o.project_id "
+                    "WHERE o.done_at IS NULL ORDER BY o.due_on LIMIT 30")]
+                return self._json(200, {"me": dict(me) if me else None, "tasks": mine,
+                                        "unassigned": unass, "cases": cases,
+                                        "obligations": ob})
+
+            if p == "/api/catalog":
+                rows = c.execute("SELECT * FROM products ORDER BY team,stage,workflow,seq")
+                return self._json(200, {
+                    "rows": [dict(r) for r in rows],
+                    "stats": catalog.stats(),
+                    "conflicts": catalog.conflicts(),
+                    "stages": [{"stage": s, "name": n, "phase": ph, "detail": d}
+                               for s, n, ph, d in catalog.STAGES],
+                    "phases": catalog.PHASES,
+                })
+            return self._json(404, {"error": "no such endpoint"})
+        finally:
+            c.close()
+
+    # ── payloads ──
+    def _bootstrap(self, c, who):
+        q = lambda s, *a: c.execute(s, a).fetchone()[0]
+        projects = [dict(r) for r in c.execute(
+            "SELECT * FROM projects ORDER BY is_bau, name")]
+        people = [dict(r) for r in c.execute(
+            "SELECT * FROM people WHERE active=1 ORDER BY team, tier, name")]
+
+        open_cases = q("SELECT COUNT(*) FROM cases WHERE status='open'")
+        at_zd = q("""SELECT COUNT(*) FROM cases ca JOIN case_lanes l
+                     ON l.case_id=ca.id AND l.idx=ca.position
+                     WHERE ca.status='open' AND l.is_stub=0""")
+        stuck = q("""SELECT COUNT(*) FROM cases ca JOIN case_lanes l
+                     ON l.case_id=ca.id AND l.idx=ca.position
+                     WHERE ca.status='open' AND l.is_stub=1""")
+        coord_open = q("SELECT COUNT(*) FROM coordination WHERE closed_at IS NULL")
+        coord_over = q("""SELECT COUNT(*) FROM coordination WHERE closed_at IS NULL
+                          AND sla_days IS NOT NULL
+                          AND julianday('now')-julianday(opened_at) > sla_days*1.4""")
+        ob_miss = q("SELECT COUNT(*) FROM obligations WHERE done_at IS NULL "
+                    "AND due_on < date('now')")
+
+        # the headline: total wait time booked against parties outside the department
+        wait_total = q("SELECT COALESCE(SUM(wait_days),0) FROM tasks") or 0
+        own_total = q("SELECT COALESCE(SUM(own_days),0) FROM tasks") or 0
+
+        stages_late = q("""SELECT COUNT(*) FROM project_stages ps
+                           WHERE ps.status='running' AND ps.planned_end IS NOT NULL
+                           AND date(ps.planned_end) < date('now')""")
+
+        return {
+            "ok": True,
+            "user": public_user(who["email"], who),
+            "projects": projects, "people": people,
+            "teams": catalog.TEAMS,
+            "stages": [{"stage": s, "name": n, "phase": ph, "detail": d}
+                       for s, n, ph, d in catalog.STAGES],
+            "phases": catalog.PHASES,
+            "routes": {k: {"label": v["label"], "source": v["source"],
+                           "lanes": [{"label": a, "owner": b, "sla": cc,
+                                      "stub": store.is_stub(b)}
+                                     for a, b, cc in v["lanes"]]}
+                       for k, v in store.ROUTES.items()},
+            "thresholds": {"petty": store.PKR_PETTY, "cpc": store.PKR_CPC,
+                           "ceo": store.PKR_CEO},
+            "kpi": {
+                "projects": len([p for p in projects if not p["is_bau"]]),
+                "people": len(people),
+                "stages_late": stages_late,
+                "open_cases": open_cases, "cases_at_zd": at_zd, "cases_stuck": stuck,
+                "coord_open": coord_open, "coord_over": coord_over,
+                "oblig_missed": ob_miss,
+                "own_days": own_total, "wait_days": wait_total,
+                "wait_share": round(wait_total / (own_total + wait_total) * 100, 1)
+                              if (own_total + wait_total) else 0,
+            },
+            "catalog_stats": catalog.stats(),
+            "conflicts": catalog.conflicts(),
+        }
+
+    def _matrix(self, c):
+        projects = [dict(r) for r in c.execute(
+            "SELECT * FROM projects WHERE is_bau=0 ORDER BY name")]
+        cells = {}
+        for r in c.execute("SELECT * FROM project_stages"):
+            cells[(r["project_id"], r["stage"])] = dict(r)
+        # per (project,stage) task rollup
+        roll = {}
+        for r in c.execute("""SELECT project_id,stage,
+                COUNT(*) n, SUM(status='done') done,
+                SUM(own_days) own, SUM(wait_days) wait,
+                SUM(CASE WHEN baseline_days IS NOT NULL AND own_days>baseline_days
+                    THEN 1 ELSE 0 END) late
+                FROM tasks GROUP BY project_id,stage"""):
+            roll[(r["project_id"], r["stage"])] = dict(r)
+        out = []
+        for p in projects:
+            row = {"project": p, "cells": []}
+            for s, name, ph, _d in catalog.STAGES:
+                cell = cells.get((p["id"], s), {"status": "not_started"})
+                rr = roll.get((p["id"], s), {})
+                row["cells"].append({
+                    "stage": s, "name": name, "phase": ph,
+                    "status": cell.get("status", "not_started"),
+                    "planned_end": cell.get("planned_end"),
+                    "own": rr.get("own") or 0, "wait": rr.get("wait") or 0,
+                    "n": rr.get("n") or 0, "done": rr.get("done") or 0,
+                    "late": rr.get("late") or 0,
+                    "overdue": bool(cell.get("status") == "running"
+                                    and cell.get("planned_end")
+                                    and cell["planned_end"][:10] < store.today().isoformat()),
+                })
+            out.append(row)
+        return {"rows": out,
+                "stages": [{"stage": s, "name": n, "phase": ph}
+                           for s, n, ph, _ in catalog.STAGES]}
+
+    def _project(self, c, pid):
+        p = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not p:
+            return {"error": "no such project"}
+        stages = [dict(r) for r in c.execute(
+            "SELECT * FROM project_stages WHERE project_id=? ORDER BY stage", (pid,))]
+        tasks = [task_view(r) for r in c.execute(
+            "SELECT * FROM tasks WHERE project_id=? ORDER BY stage,team,seq", (pid,))]
+        cases = [dict(r) for r in c.execute(
+            "SELECT * FROM cases WHERE project_id=? ORDER BY status,raised_at DESC", (pid,))]
+        coord = [dict(r, age=age_days(r["opened_at"])) for r in c.execute(
+            "SELECT * FROM coordination WHERE project_id=? AND closed_at IS NULL "
+            "ORDER BY opened_at", (pid,))]
+        ob = [dict(r) for r in c.execute(
+            "SELECT * FROM obligations WHERE project_id=? ORDER BY due_on DESC LIMIT 20", (pid,))]
+        by_team = {}
+        for t in tasks:
+            b = by_team.setdefault(t["team"], {"own": 0, "wait": 0, "n": 0, "late": 0})
+            b["own"] += t["own"]; b["wait"] += t["wait"]; b["n"] += 1
+            b["late"] += 1 if t["late"] else 0
+        return {"project": dict(p), "stages": stages, "tasks": tasks,
+                "cases": cases, "coordination": coord, "obligations": ob,
+                "by_team": by_team,
+                "stage_names": {s: n for s, n, _p, _d in catalog.STAGES}}
+
+    def _team(self, c, team):
+        tasks = [task_view(r) for r in c.execute(
+            "SELECT * FROM tasks WHERE team=? ORDER BY stage,seq", (team,))]
+        people = [dict(r) for r in c.execute(
+            "SELECT * FROM people WHERE team=? AND active=1 ORDER BY tier,name", (team,))]
+        done = [t for t in tasks if t["status"] == "done" and t["baseline"] is not None]
+        on_time = sum(1 for t in done if not t["late"])
+        own = sum(t["own"] for t in tasks)
+        wait = sum(t["wait"] for t in tasks)
+        rev = sum(t["revision"] for t in tasks)
+        # per-workflow SLA
+        wf = {}
+        for t in tasks:
+            w = wf.setdefault(t["workflow"] or "—",
+                              {"n": 0, "done": 0, "late": 0, "own": 0, "wait": 0,
+                               "base": 0, "rev": 0})
+            w["n"] += 1
+            w["own"] += t["own"]; w["wait"] += t["wait"]; w["rev"] += t["revision"]
+            if t["baseline"]: w["base"] += t["baseline"]
+            if t["status"] == "done":
+                w["done"] += 1
+                if t["late"]: w["late"] += 1
+        # who owes this team what
+        owed = [dict(r, age=age_days(r["opened_at"])) for r in c.execute(
+            "SELECT * FROM coordination WHERE from_team=? AND closed_at IS NULL "
+            "ORDER BY opened_at", (team,))]
+        return {
+            "team": team, "people": people, "workflows": wf, "owed": owed,
+            "kpi": {"tasks": len(tasks), "done": len(done),
+                    "on_time_pct": round(on_time / len(done) * 100, 1) if done else None,
+                    "own_days": own, "wait_days": wait, "revisions": rev,
+                    "wait_share": round(wait / (own + wait) * 100, 1) if (own + wait) else 0},
+            "tasks": tasks[:400],
+        }
+
+    def _tasks(self, c):
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        sql = "SELECT * FROM tasks WHERE 1=1"
+        args = []
+        for key, col in (("team", "team"), ("stage", "stage"), ("status", "status")):
+            if key in q:
+                sql += f" AND {col}=?"; args.append(q[key][0])
+        if "project" in q:
+            sql += " AND project_id=?"; args.append(int(q["project"][0]))
+        sql += " ORDER BY stage,team,seq LIMIT 600"
+        return {"rows": [task_view(r) for r in c.execute(sql, args)]}
+
+    def _cases(self, c):
+        out = []
+        for r in c.execute("SELECT ca.*, p.name pname, p.code pcode FROM cases ca "
+                           "LEFT JOIN projects p ON p.id=ca.project_id "
+                           "ORDER BY ca.status, ca.raised_at"):
+            lanes = [dict(l) for l in c.execute(
+                "SELECT * FROM case_lanes WHERE case_id=? ORDER BY idx", (r["id"],))]
+            cur = lanes[r["position"]] if r["position"] < len(lanes) else None
+            v = r["value_pkr"]
+            gate = ("CEO Office" if v and v >= store.PKR_CEO else
+                    "CPC" if v and v >= store.PKR_CPC else
+                    "Petty cash" if v and v < store.PKR_PETTY else
+                    "Dept head" if v else None)
+            out.append(dict(r, lanes=lanes, current=cur,
+                            at_zd=bool(cur and not cur["is_stub"]),
+                            age=age_days(cur["entered_at"]) if cur else 0,
+                            overdue=bool(cur and cur["sla_days"] and
+                                         age_days(cur["entered_at"]) > cur["sla_days"]),
+                            value_gate=gate,
+                            route=store.ROUTES.get(r["type"], {}).get("label", r["type"]),
+                            source=store.ROUTES.get(r["type"], {}).get("source", "")))
+        return {"rows": out, "routes": list(store.ROUTES.keys())}
+
+    def _coord(self, c):
+        rows = []
+        for r in c.execute("SELECT co.*, p.name pname, p.code pcode FROM coordination co "
+                           "LEFT JOIN projects p ON p.id=co.project_id "
+                           "WHERE co.closed_at IS NULL ORDER BY co.opened_at"):
+            a = age_days(r["opened_at"])
+            rows.append(dict(r, age=a, external=store.is_stub(r["to_lane"]),
+                             over=bool(r["sla_days"] and a > r["sla_days"]),
+                             overrun=(a - r["sla_days"]) if r["sla_days"] else None))
+        # who owes the department the most days
+        by_lane = {}
+        for r in rows:
+            b = by_lane.setdefault(r["to_lane"], {"n": 0, "days": 0, "over": 0})
+            b["n"] += 1; b["days"] += r["age"]; b["over"] += 1 if r["over"] else 0
+        return {"rows": rows, "by_lane": by_lane}
+
+    def _oblig(self, c):
+        rows = [dict(r) for r in c.execute(
+            "SELECT o.*, p.name pname FROM obligations o "
+            "LEFT JOIN projects p ON p.id=o.project_id ORDER BY o.due_on DESC LIMIT 200")]
+        t = store.today().isoformat()
+        for r in rows:
+            r["missed"] = bool(not r["done_at"] and r["due_on"] < t)
+            r["pending"] = bool(not r["done_at"] and r["due_on"] >= t)
+        agg = {}
+        for r in rows:
+            a = agg.setdefault(r["label"], {"due": 0, "done": 0, "missed": 0})
+            a["due"] += 1
+            a["done"] += 1 if r["done_at"] else 0
+            a["missed"] += 1 if r["missed"] else 0
+        return {"rows": rows, "summary": agg}
+
+    # ── writes ──
+    def do_POST(self):
+        if not self._strip():
+            self.send_error(404); return
+        p = self.path.split("?")[0]
+
+        if p == "/api/login":
+            return self._login()
+
+        who = self._who()
+        if not who:
+            return self._json(401, {"error": "Sign in to use ZD PULSE."})
+        d = self._body() or {}
+        c = store.conn()
+        try:
+            if p in actions.DISPATCH:
+                try:
+                    out = actions.DISPATCH[p](c, who, d)
+                    c.commit()
+                    return self._json(200, out)
+                except actions.Refused as x:
+                    c.commit()          # the refusal itself was logged
+                    return self._json(409, x.payload)
+                except Exception as x:
+                    c.rollback()
+                    return self._json(400, {"error": str(x)})
+
+            if p == "/api/task/start":
+                return self._task_move(c, who, d, "start")
+            if p == "/api/task/finish":
+                return self._task_move(c, who, d, "finish")
+            if p == "/api/task/revise":
+                return self._task_move(c, who, d, "revise")
+            if p == "/api/case/advance":
+                return self._case_advance(c, who, d)
+            if p == "/api/coordination/close":
+                cid = int(d.get("id") or 0)
+                r = c.execute("SELECT * FROM coordination WHERE id=?", (cid,)).fetchone()
+                if not r:
+                    return self._json(404, {"error": "no such item"})
+                c.execute("UPDATE coordination SET closed_at=? WHERE id=?", (store.now(), cid))
+                store.log(c, who["name"], who.get("tier", 3), "coordination", cid, "close",
+                          f"Closed ask to {r['to_lane']}: {r['ask']}", team=r["from_team"])
+                c.commit()
+                return self._json(200, {"ok": True})
+            return self._json(404, {"error": "no such endpoint"})
+        finally:
+            c.close()
+
+    def _task_move(self, c, who, d, action):
+        tid = int(d.get("id") or 0)
+        r = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+        if not r:
+            return self._json(404, {"error": "no such task"})
+        pname = c.execute("SELECT name FROM projects WHERE id=?",
+                          (r["project_id"],)).fetchone()["name"]
+        t = store.today().isoformat()
+
+        if action == "start":
+            if r["actual_sd"]:
+                return self._json(409, {"error": "already started"})
+            c.execute("UPDATE tasks SET actual_sd=?,status=?,updated_at=? WHERE id=?",
+                      (t, "waiting" if r["is_external"] else "running", store.now(), tid))
+            summ = f"Started · {r['title']}"
+        elif action == "finish":
+            if not r["actual_sd"]:
+                # a soft gate: refused, and the refusal is logged. blocked attempts
+                # are the highest-signal rows in the ledger — nobody counts them today.
+                store.log(c, who["name"], who.get("tier", 3), "task", tid, "finish",
+                          f"BLOCKED — finish before start · {r['title']}",
+                          project=pname, team=r["team"], blocked=1)
+                c.commit()
+                return self._json(409, {"error": "Cannot finish a task that never started.",
+                                        "blocked": True})
+            days = store.working_days_between(r["actual_sd"], t) or 0
+            if r["is_external"]:
+                c.execute("UPDATE tasks SET actual_ed=?,status='done',wait_days=?,"
+                          "updated_at=? WHERE id=?", (t, days, store.now(), tid))
+                c.execute("UPDATE coordination SET closed_at=? WHERE task_id=? "
+                          "AND closed_at IS NULL", (store.now(), tid))
+            else:
+                c.execute("UPDATE tasks SET actual_ed=?,status='done',own_days=?,"
+                          "updated_at=? WHERE id=?", (t, days, store.now(), tid))
+            summ = f"Finished in {days}d · {r['title']}"
+        else:  # revise — the "Changes Required" loop
+            c.execute("UPDATE tasks SET revision=revision+1,status='running',"
+                      "actual_ed=NULL,updated_at=? WHERE id=?", (store.now(), tid))
+            summ = f"Revision {r['revision']+1} · {r['title']}"
+
+        store.log(c, who["name"], who.get("tier", 3), "task", tid, action, summ,
+                  project=pname, team=r["team"])
+        c.commit()
+        row = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+        return self._json(200, {"ok": True, "task": task_view(row)})
+
+    def _case_advance(self, c, who, d):
+        cid = int(d.get("id") or 0)
+        ca = c.execute("SELECT * FROM cases WHERE id=?", (cid,)).fetchone()
+        if not ca:
+            return self._json(404, {"error": "no such case"})
+        lanes = [dict(l) for l in c.execute(
+            "SELECT * FROM case_lanes WHERE case_id=? ORDER BY idx", (cid,))]
+        pos = ca["position"]
+        if pos >= len(lanes):
+            return self._json(409, {"error": "case already at end of route"})
+        cur = lanes[pos]
+        pname = c.execute("SELECT name FROM projects WHERE id=?",
+                          (ca["project_id"],)).fetchone()["name"]
+
+        # The gate. A lane owned by a department whose system does not exist yet
+        # cannot be actioned from inside ZD PULSE — and the attempt is recorded,
+        # because "how often are we blocked waiting on PM" is the number that
+        # justifies building the PM system.
+        if cur["is_stub"] and not d.get("force"):
+            store.log(c, who["name"], who.get("tier", 3), "case", cid, "advance",
+                      f"BLOCKED — {ca['ref']} sits with {cur['owner_lane']} "
+                      f"({age_days(cur['entered_at'])}d), outside ZD PULSE",
+                      project=pname, blocked=1)
+            c.commit()
+            return self._json(409, {
+                "error": f"This lane belongs to {cur['owner_lane']} — outside Arch & Design.",
+                "detail": "Logged as an external wait. It becomes actionable when that "
+                          "department's system is connected.",
+                "blocked": True, "lane": cur["owner_lane"],
+                "waiting_days": age_days(cur["entered_at"])})
+
+        c.execute("UPDATE case_lanes SET left_at=?,actor=?,outcome=? WHERE id=?",
+                  (store.now(), who["name"], d.get("outcome") or "passed", cur["id"]))
+        nxt = pos + 1
+        if nxt >= len(lanes):
+            c.execute("UPDATE cases SET position=?,status='approved',closed_at=? WHERE id=?",
+                      (nxt, store.now(), cid))
+        else:
+            c.execute("UPDATE case_lanes SET entered_at=? WHERE id=?",
+                      (store.now(), lanes[nxt]["id"]))
+            c.execute("UPDATE cases SET position=? WHERE id=?", (nxt, cid))
+        store.log(c, who["name"], who.get("tier", 3), "case", cid, "advance",
+                  f"{ca['ref']} · {cur['label']} → "
+                  f"{lanes[nxt]['label'] if nxt < len(lanes) else 'CLOSED'}",
+                  project=pname)
+        c.commit()
+        return self._json(200, {"ok": True})
+
+    def _login(self):
+        d = self._body()
+        if d is None:
+            return self._json(400, {"error": "bad json"})
+        email = str(d.get("email", "")).strip().lower()
+        pw = d.get("password") or ""
+        users = load_users()
+        u = users.get(email)
+        if not u or not verify_pw(pw, u.get("salt", ""), u.get("hash", "")):
+            return self._json(401, {"error": "That email or password is not right."})
+        u["lastLogin"] = store.now()
+        save_users(users)
+        return self._json(200, {"ok": True, "token": make_token(email),
+                                "user": public_user(email, u)})
+
+    def end_headers(self):
+        if self.path.endswith((".html", ".js", ".css")):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+
+class Server(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+if __name__ == "__main__":
+    store.seed()
+    c = store.conn(); store.demo(c); c.close()
+    seed_users()
+    s = catalog.stats()
+    print(f"ZD PULSE on http://{HOST}:{PORT}{MOUNT}/")
+    print(f"  catalog  {s['workflows']} workflows · {s['steps']} steps · "
+          f"{s['tat_conflicts']} TAT conflicts · {s['unknown_tat']} steps with no duration")
+    Server((HOST, PORT), H).serve_forever()

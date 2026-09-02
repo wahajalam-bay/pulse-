@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZD PULSE — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/zd.css">
+</head>
+<body>
+<div class="lg">
+  <form class="lg-box" id="f">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:20px">
+      <div style="width:40px;height:40px;border-radius:12px;background:var(--accent);
+                  color:#12233B;display:grid;place-items:center;font-weight:800;
+                  font-size:14px;letter-spacing:-.03em">ZD</div>
+      <div class="brand"><b>ZAMEEN</b><span>DEVELOPMENTS</span></div>
+    </div>
+    <h1>Architecture &amp; Design</h1>
+    <p>Workflows, stages, coordination and approvals — one place.</p>
+    <div id="err"></div>
+    <div class="fld"><label for="e">Work email</label>
+      <input id="e" type="email" autocomplete="username" required placeholder="name@zameen.com"></div>
+    <div class="fld"><label for="p">Password</label>
+      <input id="p" type="password" autocomplete="current-password" required></div>
+    <button class="btn pri" style="width:100%;padding:11px;font-size:13px" id="go">Sign in</button>
+    <div class="lg-hint">
+      <b>Review build.</b> Sign in as <code>haroon@zameen.com</code> ·
+      <code>ahmed@zameen.com</code> · <code>rashid@zameen.com</code> ·
+      <code>yahya@zameen.com</code> · <code>ali@zameen.com</code><br>
+      Password for all: <code>ZDesign!2026</code>
+    </div>
+  </form>
+</div>
+<script>
+const M = location.pathname.replace(/\/login\.html$/, "") || "";
+document.getElementById("f").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const go = document.getElementById("go");
+  go.disabled = true; go.textContent = "Signing in…";
+  try {
+    const r = await fetch(M + "/api/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email: e.value.trim().toLowerCase(), password: p.value})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Sign-in failed");
+    localStorage.setItem("zd.tok", d.token);
+    localStorage.setItem("zd.user", JSON.stringify(d.user));
+    location.href = M + "/index.html";
+  } catch (x) {
+    document.getElementById("err").innerHTML =
+      `<div class="lg-err">${x.message}</div>`;
+    go.disabled = false; go.textContent = "Sign in";
+  }
+});
+</script>
+</body>
+</html>

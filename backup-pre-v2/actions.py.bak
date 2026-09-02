@@ -1,0 +1,645 @@
+#!/usr/bin/env python3
+"""ZD PULSE — the write layer. Everything a person CREATES or DECIDES.
+
+WHY THIS IS A SEPARATE MODULE
+  The first cut of this system had five write verbs and was, fairly, called a
+  reporting layer. This module is the difference between a dashboard and a
+  workstation: it is where work is raised, assigned, decided, signed off and
+  handed over. Reads live in server.py; every mutation lives here so the audit
+  surface is one file.
+
+THE RULE EVERY HANDLER FOLLOWS
+  1. authorise    — tier and lane, not just "is logged in"
+  2. gate         — check preconditions; a refusal is logged, never silent
+  3. mutate       — one transaction
+  4. ledger       — who, what authority, what changed
+  Nothing mutates without steps 1 and 4.
+"""
+import json, datetime, re
+import store, catalog
+
+
+class Refused(Exception):
+    """A gate said no. Carries the payload the client shows the user."""
+    def __init__(self, msg, **extra):
+        super().__init__(msg)
+        self.payload = dict(extra, error=msg, blocked=True)
+
+
+def _req(d, *keys):
+    missing = [k for k in keys if not str(d.get(k, "")).strip()]
+    if missing:
+        raise Refused("Missing required field: " + ", ".join(missing))
+
+
+def _tier(who):
+    return who.get("tier", 3)
+
+
+def _pname(c, pid):
+    r = c.execute("SELECT name FROM projects WHERE id=?", (pid,)).fetchone()
+    return r["name"] if r else None
+
+
+def _next_ref(c, prefix, code):
+    n = c.execute("SELECT COUNT(*) FROM cases WHERE type=?", (prefix,)).fetchone()[0]
+    return f"{prefix}-{code or 'ZD'}-{100 + n + 1}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PROJECTS & INTAKE   — Manual §3
+# ══════════════════════════════════════════════════════════════════════════
+INTAKE_FIELDS = [
+    ("regulatory", "Regulatory data (bylaws, ground coverage)", "Acquisition / Legal"),
+    ("land_area",  "Land area & plot size",                     "Acquisition / Legal"),
+    ("height",     "Height of building",                        "Acquisition / Feasibility"),
+    ("basements",  "Number of basements",                       "Feasibility / Geotech"),
+    ("inventory",  "Inventory type",                            "Sales / Feasibility"),
+    ("seismic",    "Earthquake zone identification",            "Design (Structural)"),
+    ("mep",        "MEP design / layouts",                      "Design (MEP)"),
+]
+
+
+def project_create(c, who, d):
+    """Create a project and open its intake. Manual §3.1's table, field for field."""
+    if _tier(who) > 1:
+        raise Refused("Only the department head or a senior manager can open a project.")
+    _req(d, "name")
+    name = d["name"].strip()
+    if c.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone():
+        raise Refused(f"A project called “{name}” already exists.")
+    code = (d.get("code") or "".join(w[0] for w in name.split()[:3])).upper()[:5]
+    c.execute("INSERT INTO projects(name,code,kind,city,status,created_at)"
+              " VALUES(?,?,?,?,'Active',?)",
+              (name, code, d.get("kind") or "Residential", d.get("city") or "Lahore",
+               store.now()))
+    pid = c.execute("SELECT id FROM projects WHERE name=?", (name,)).fetchone()["id"]
+    for stage, _n, _p, _dd in catalog.STAGES:
+        c.execute("INSERT OR IGNORE INTO project_stages(project_id,stage) VALUES(?,?)",
+                  (pid, stage))
+    c.execute("INSERT INTO intake(project_id,updated_at,updated_by) VALUES(?,?,?)",
+              (pid, store.now(), who["name"]))
+    store.log(c, who["name"], _tier(who), "project", pid, "create",
+              f"Opened project {name} ({code}) — 13 stations, intake started", project=name)
+    return {"ok": True, "id": pid}
+
+
+def intake_save(c, who, d):
+    """Fill the intake. Stage 3 cannot be initiated until it is complete — that is
+    the gate that makes 'who is holding up the start' a field with a name on it."""
+    pid = int(d.get("project_id") or 0)
+    if not _pname(c, pid):
+        raise Refused("No such project.")
+    cur = c.execute("SELECT * FROM intake WHERE project_id=?", (pid,)).fetchone()
+    if not cur:
+        c.execute("INSERT INTO intake(project_id) VALUES(?)", (pid,))
+    sets, args = [], []
+    for k, _lbl, _src in INTAKE_FIELDS:
+        if k in d:
+            sets.append(f"{k}=?"); args.append(str(d[k]).strip())
+    if not sets:
+        raise Refused("Nothing to save.")
+    args += [store.now(), who["name"], pid]
+    c.execute(f"UPDATE intake SET {','.join(sets)},updated_at=?,updated_by=? "
+              "WHERE project_id=?", args)
+    row = c.execute("SELECT * FROM intake WHERE project_id=?", (pid,)).fetchone()
+    filled = sum(1 for k, _l, _s in INTAKE_FIELDS if (row[k] or "").strip())
+    store.log(c, who["name"], _tier(who), "intake", pid, "save",
+              f"Intake {filled}/{len(INTAKE_FIELDS)} fields complete",
+              project=_pname(c, pid))
+    return {"ok": True, "filled": filled, "of": len(INTAKE_FIELDS)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# STAGES  — initiating a stage is what generates the work
+# ══════════════════════════════════════════════════════════════════════════
+def stage_initiate(c, who, d):
+    """Generate this stage's tasks for this project, straight from the catalog.
+
+    THE GATE: stage 3 needs a complete intake (§3.4 — the initial gate), and no
+    stage may open while the previous one is unsigned. Refusals are logged; a
+    caller may override with a stated reason, which is also logged. Soft gates,
+    because a hard block just moves the work back to paper.
+    """
+    pid, stage = int(d.get("project_id") or 0), int(d.get("stage") or 0)
+    pname = _pname(c, pid)
+    if not pname:
+        raise Refused("No such project.")
+    if _tier(who) > 2:
+        raise Refused("Only a lead or above can initiate a stage.")
+    st = c.execute("SELECT * FROM project_stages WHERE project_id=? AND stage=?",
+                   (pid, stage)).fetchone()
+    if st and st["status"] not in ("not_started",):
+        raise Refused(f"Stage {stage} is already {st['status']}.")
+
+    reason = (d.get("override_reason") or "").strip()
+
+    if stage == 3:
+        row = c.execute("SELECT * FROM intake WHERE project_id=?", (pid,)).fetchone()
+        filled = sum(1 for k, _l, _s in INTAKE_FIELDS
+                     if row and (row[k] or "").strip()) if row else 0
+        if filled < len(INTAKE_FIELDS) and not reason:
+            store.log(c, who["name"], _tier(who), "stage", stage, "initiate",
+                      f"BLOCKED — {pname} stage 3 with intake {filled}/"
+                      f"{len(INTAKE_FIELDS)} complete", project=pname, blocked=1)
+            missing = [lbl for k, lbl, src in INTAKE_FIELDS
+                       if not (row and (row[k] or "").strip())]
+            raise Refused("Intake is incomplete — Manual §3.4 makes this the initial gate.",
+                          missing=missing, gate="intake", overridable=True)
+
+    prev = c.execute("SELECT * FROM project_stages WHERE project_id=? AND stage=?",
+                     (pid, stage - 1)).fetchone()
+    if stage > 3 and prev and prev["status"] not in ("done",) and not reason:
+        store.log(c, who["name"], _tier(who), "stage", stage, "initiate",
+                  f"BLOCKED — {pname} stage {stage} before stage {stage-1} closed",
+                  project=pname, blocked=1)
+        raise Refused(f"Stage {stage-1} has not been signed off.",
+                      gate="sequence", overridable=True)
+
+    steps = c.execute("SELECT * FROM products WHERE stage=? ORDER BY team,seq",
+                      (stage,)).fetchall()
+    if not steps:
+        raise Refused(f"The catalog has no steps for stage {stage}.")
+
+    start = store.today()
+    cursor, made = start, 0
+    for p in steps:
+        psd = cursor
+        ped = store._add_working_days(psd, p["tat_days"] or 2)
+        c.execute(
+            "INSERT INTO tasks(project_id,product_id,team,workflow,stage,seq,title,"
+            "lane,is_external,baseline_days,planned_sd,planned_ed,status,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",
+            (pid, p["id"], p["team"], p["workflow"], stage, p["seq"], p["step"],
+             p["lane"], p["is_external"], p["tat_days"],
+             psd.isoformat(), ped.isoformat(), store.now(), store.now()))
+        cursor = ped; made += 1
+
+    c.execute("UPDATE project_stages SET status='running',planned_start=?,planned_end=?,"
+              "actual_start=? WHERE project_id=? AND stage=?",
+              (start.isoformat(), cursor.isoformat(), start.isoformat(), pid, stage))
+
+    # the mandatory checklist for this stage — Manual §4.1
+    c.execute("INSERT INTO checklists(project_id,stage,created_at) VALUES(?,?,?)",
+              (pid, stage, store.now()))
+
+    store.log(c, who["name"], _tier(who), "stage", stage,
+              "initiate_override" if reason else "initiate",
+              f"Initiated stage {stage} on {pname} — {made} tasks from catalog"
+              + (f" · OVERRIDE: {reason}" if reason else ""), project=pname)
+    return {"ok": True, "tasks": made}
+
+
+def stage_signoff(c, who, d):
+    """Close a stage. Manual §4.1 — the checklist must be signed first."""
+    pid, stage = int(d.get("project_id") or 0), int(d.get("stage") or 0)
+    pname = _pname(c, pid)
+    if _tier(who) > 1:
+        raise Refused("Only a senior manager or the department head can sign off a stage.")
+    reason = (d.get("override_reason") or "").strip()
+    cl = c.execute("SELECT * FROM checklists WHERE project_id=? AND stage=?",
+                   (pid, stage)).fetchone()
+    if cl and not cl["signed_at"] and not reason:
+        store.log(c, who["name"], _tier(who), "stage", stage, "signoff",
+                  f"BLOCKED — {pname} stage {stage} checklist unsigned (§4.1)",
+                  project=pname, blocked=1)
+        raise Refused("The stage checklist has not been signed — Manual §4.1 makes it "
+                      "mandatory before any drawing issuance.",
+                      gate="checklist", overridable=True)
+    open_n = c.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND stage=? "
+                       "AND status!='done'", (pid, stage)).fetchone()[0]
+    if open_n and not reason:
+        raise Refused(f"{open_n} steps are still open in this stage.",
+                      gate="open_tasks", overridable=True)
+    c.execute("UPDATE project_stages SET status='done',actual_end=? "
+              "WHERE project_id=? AND stage=?", (store.today().isoformat(), pid, stage))
+    store.log(c, who["name"], _tier(who), "stage", stage,
+              "signoff_override" if reason else "signoff",
+              f"Signed off stage {stage} on {pname}"
+              + (f" · OVERRIDE: {reason}" if reason else ""), project=pname)
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TASKS
+# ══════════════════════════════════════════════════════════════════════════
+def task_create(c, who, d):
+    """An ad-hoc task. Not everything the department does is in the booklet."""
+    _req(d, "title", "project_id")
+    pid = int(d["project_id"])
+    pname = _pname(c, pid)
+    if not pname:
+        raise Refused("No such project.")
+    team = d.get("team") or who.get("team") or "Architecture"
+    base = d.get("baseline_days")
+    base = int(base) if str(base or "").strip().isdigit() else None
+    psd = store.today()
+    ped = store._add_working_days(psd, base or 2)
+    c.execute("INSERT INTO tasks(project_id,team,workflow,stage,seq,title,person_id,"
+              "lane,is_external,baseline_days,planned_sd,planned_ed,status,note,"
+              "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?,?,'queued',?,?,?)",
+              (pid, team, d.get("workflow") or "Ad hoc",
+               int(d.get("stage") or 13), 999, d["title"].strip(),
+               int(d["person_id"]) if str(d.get("person_id") or "").isdigit() else None,
+               team, base, psd.isoformat(), ped.isoformat(),
+               (d.get("note") or "").strip(), store.now(), store.now()))
+    tid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    store.log(c, who["name"], _tier(who), "task", tid, "create",
+              f"Created ad-hoc task · {d['title'].strip()}", project=pname, team=team)
+    return {"ok": True, "id": tid}
+
+
+def task_assign(c, who, d):
+    tid = int(d.get("id") or 0)
+    t = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+    if not t:
+        raise Refused("No such task.")
+    pidv = d.get("person_id")
+    person = None
+    if str(pidv or "").isdigit():
+        person = c.execute("SELECT * FROM people WHERE id=?", (int(pidv),)).fetchone()
+        if not person:
+            raise Refused("No such person.")
+        if person["team"] != t["team"]:
+            raise Refused(f"{person['name']} is in {person['team']}; "
+                          f"this step belongs to {t['team']}.")
+    c.execute("UPDATE tasks SET person_id=?,updated_at=? WHERE id=?",
+              (person["id"] if person else None, store.now(), tid))
+    store.log(c, who["name"], _tier(who), "task", tid, "assign",
+              f"Assigned to {person['name'] if person else 'nobody'} · {t['title']}",
+              project=_pname(c, t["project_id"]), team=t["team"])
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CASES  — raise and decide, not just advance
+# ══════════════════════════════════════════════════════════════════════════
+def case_create(c, who, d):
+    """Raise a MAR / DCR / RFI / shop drawing / vetting engagement.
+
+    The route is instantiated from ROUTES, so the approval chain is the manual's,
+    not whatever the person raising it remembers.
+    """
+    _req(d, "type", "title", "project_id")
+    typ = d["type"].upper()
+    if typ not in store.ROUTES:
+        raise Refused(f"Unknown case type {typ}.")
+    pid = int(d["project_id"])
+    pr = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not pr:
+        raise Refused("No such project.")
+    val = d.get("value_pkr")
+    try:
+        val = float(str(val).replace(",", "")) if str(val or "").strip() else None
+    except ValueError:
+        raise Refused("Value must be a number.")
+
+    route = store.ROUTES[typ]
+    ref = _next_ref(c, typ, pr["code"])
+    c.execute("INSERT INTO cases(ref,type,project_id,title,value_pkr,position,status,"
+              "raised_by,raised_at,note) VALUES(?,?,?,?,?,0,'open',?,?,?)",
+              (ref, typ, pid, d["title"].strip(), val, who["name"],
+               store.today().isoformat(), (d.get("note") or "").strip()))
+    cid = c.execute("SELECT id FROM cases WHERE ref=?", (ref,)).fetchone()["id"]
+    for idx, (label, owner, sla) in enumerate(route["lanes"]):
+        c.execute("INSERT INTO case_lanes(case_id,idx,label,owner_lane,sla_days,"
+                  "is_stub,entered_at) VALUES(?,?,?,?,?,?,?)",
+                  (cid, idx, label, owner, sla, int(store.is_stub(owner)),
+                   store.now() if idx == 0 else None))
+
+    gate = ("CEO Office" if val and val >= store.PKR_CEO else
+            "CPC" if val and val >= store.PKR_CPC else None)
+    store.log(c, who["name"], _tier(who), "case", cid, "create",
+              f"Raised {ref} · {d['title'].strip()}"
+              + (f" · {gate} approval required (PKR {val:,.0f})" if gate else ""),
+              project=pr["name"])
+    return {"ok": True, "ref": ref, "id": cid, "gate": gate}
+
+
+def case_decide(c, who, d):
+    """Approve, reject or return a case at its current lane — with a reason.
+
+    "Advance" was the old verb and it was wrong: a review that can only say yes is
+    not a review. Reject closes the case; return sends it back one lane.
+    """
+    cid = int(d.get("id") or 0)
+    ca = c.execute("SELECT * FROM cases WHERE id=?", (cid,)).fetchone()
+    if not ca:
+        raise Refused("No such case.")
+    if ca["status"] != "open":
+        raise Refused(f"This case is already {ca['status']}.")
+    lanes = c.execute("SELECT * FROM case_lanes WHERE case_id=? ORDER BY idx",
+                      (cid,)).fetchall()
+    pos = ca["position"]
+    if pos >= len(lanes):
+        raise Refused("Case is already at the end of its route.")
+    cur = lanes[pos]
+    pname = _pname(c, ca["project_id"])
+    outcome = (d.get("outcome") or "approve").lower()
+    reason = (d.get("reason") or "").strip()
+
+    if cur["is_stub"] and not d.get("force"):
+        age = store.working_days_between(cur["entered_at"], store.today().isoformat()) or 0
+        store.log(c, who["name"], _tier(who), "case", cid, "decide",
+                  f"BLOCKED — {ca['ref']} sits with {cur['owner_lane']} ({age}d), "
+                  f"outside ZD PULSE", project=pname, blocked=1)
+        raise Refused(f"This lane belongs to {cur['owner_lane']} — outside Arch & Design.",
+                      detail="Logged as an external wait. It becomes actionable when that "
+                             "department's system is connected.",
+                      lane=cur["owner_lane"], waiting_days=age)
+
+    if outcome in ("reject", "return") and not reason:
+        raise Refused("A rejection or return needs a reason — an unexplained "
+                      "decision cannot be judged.")
+
+    # value gate: CPC / CEO thresholds from the Supply Chain Manual
+    v = ca["value_pkr"]
+    if outcome == "approve" and v and v >= store.PKR_CPC:
+        need = "CEO Office" if v >= store.PKR_CEO else "CPC"
+        last = lanes[-1]["idx"]
+        if pos == last and not d.get("force"):
+            store.log(c, who["name"], _tier(who), "case", cid, "decide",
+                      f"BLOCKED — {ca['ref']} PKR {v:,.0f} needs {need} approval",
+                      project=pname, blocked=1)
+            raise Refused(f"PKR {v:,.0f} requires {need} approval "
+                          f"(Supply Chain Manual §18).", gate="value", overridable=True)
+
+    c.execute("UPDATE case_lanes SET left_at=?,actor=?,outcome=?,note=? WHERE id=?",
+              (store.now(), who["name"], outcome, reason, cur["id"]))
+
+    if outcome == "reject":
+        c.execute("UPDATE cases SET status='rejected',closed_at=? WHERE id=?",
+                  (store.now(), cid))
+        summ = f"{ca['ref']} REJECTED at {cur['label']} — {reason}"
+    elif outcome == "return":
+        nxt = max(pos - 1, 0)
+        c.execute("UPDATE case_lanes SET entered_at=?,left_at=NULL,outcome=NULL "
+                  "WHERE id=?", (store.now(), lanes[nxt]["id"]))
+        c.execute("UPDATE cases SET position=? WHERE id=?", (nxt, cid))
+        summ = f"{ca['ref']} returned to {lanes[nxt]['label']} — {reason}"
+    else:
+        nxt = pos + 1
+        if nxt >= len(lanes):
+            c.execute("UPDATE cases SET position=?,status='approved',closed_at=? "
+                      "WHERE id=?", (nxt, store.now(), cid))
+            summ = f"{ca['ref']} APPROVED — route complete"
+        else:
+            c.execute("UPDATE case_lanes SET entered_at=? WHERE id=?",
+                      (store.now(), lanes[nxt]["id"]))
+            c.execute("UPDATE cases SET position=? WHERE id=?", (nxt, cid))
+            summ = f"{ca['ref']} · {cur['label']} → {lanes[nxt]['label']}"
+            if lanes[nxt]["is_stub"]:
+                # handing to a department with no system = an open coordination ask
+                c.execute("INSERT INTO coordination(project_id,stage,from_team,to_lane,"
+                          "ask,sla_days,opened_at) VALUES(?,?,?,?,?,?,?)",
+                          (ca["project_id"], 13, "Architecture", lanes[nxt]["owner_lane"],
+                           f"{ca['ref']} — {lanes[nxt]['label']}", lanes[nxt]["sla_days"],
+                           store.today().isoformat()))
+    store.log(c, who["name"], _tier(who), "case", cid, outcome, summ, project=pname)
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COORDINATION  — raise the ask, not just close it
+# ══════════════════════════════════════════════════════════════════════════
+def coord_create(c, who, d):
+    _req(d, "project_id", "to_lane", "ask")
+    pid = int(d["project_id"])
+    pname = _pname(c, pid)
+    if not pname:
+        raise Refused("No such project.")
+    sla = d.get("sla_days")
+    sla = int(sla) if str(sla or "").strip().isdigit() else None
+    team = d.get("from_team") or who.get("team") or "Architecture"
+    c.execute("INSERT INTO coordination(project_id,stage,from_team,to_lane,ask,"
+              "sla_days,opened_at) VALUES(?,?,?,?,?,?,?)",
+              (pid, int(d.get("stage") or 0), team, d["to_lane"].strip(),
+               d["ask"].strip(), sla, store.today().isoformat()))
+    cid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    store.log(c, who["name"], _tier(who), "coordination", cid, "create",
+              f"Asked {d['to_lane'].strip()}: {d['ask'].strip()}"
+              + (f" (SLA {sla}d)" if sla else ""), project=pname, team=team)
+    return {"ok": True, "id": cid}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# OBLIGATIONS  — Manual §9 and §15
+# ══════════════════════════════════════════════════════════════════════════
+def obligation_complete(c, who, d):
+    oid = int(d.get("id") or 0)
+    o = c.execute("SELECT * FROM obligations WHERE id=?", (oid,)).fetchone()
+    if not o:
+        raise Refused("No such obligation.")
+    if o["done_at"]:
+        raise Refused("Already completed.")
+    ev = (d.get("evidence") or "").strip()
+    if not ev:
+        raise Refused("Record what was done — an obligation ticked with no evidence "
+                      "is not evidence.")
+    c.execute("UPDATE obligations SET done_at=?,done_by=?,evidence=? WHERE id=?",
+              (store.now(), who["name"], ev, oid))
+    store.log(c, who["name"], _tier(who), "obligation", oid, "complete",
+              f"{o['label']} — {ev[:80]}",
+              project=_pname(c, o["project_id"]) if o["project_id"] else None)
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SITE VISITS  — Manual §15. Feeds the Monthly Compliance Report.
+# ══════════════════════════════════════════════════════════════════════════
+def visit_create(c, who, d):
+    _req(d, "project_id", "findings")
+    pid = int(d["project_id"])
+    pname = _pname(c, pid)
+    if not pname:
+        raise Refused("No such project.")
+    nc = 1 if d.get("non_compliance") else 0
+    c.execute("INSERT INTO site_visits(project_id,visited_on,by_whom,findings,"
+              "non_compliance,photos,created_at) VALUES(?,?,?,?,?,?,?)",
+              (pid, d.get("visited_on") or store.today().isoformat(), who["name"],
+               d["findings"].strip(), nc,
+               int(d.get("photos") or 0), store.now()))
+    vid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    # Close this month's site-visit obligation automatically — doing the work IS
+    # the evidence, so nobody has to tick a box twice. SQLite has no ORDER BY on
+    # UPDATE, so the target row is selected first.
+    due = c.execute("SELECT id FROM obligations WHERE project_id=? AND kind='site_visit' "
+                    "AND done_at IS NULL AND due_on <= date('now') "
+                    "ORDER BY due_on DESC LIMIT 1", (pid,)).fetchone()
+    if due:
+        c.execute("UPDATE obligations SET done_at=?,done_by=?,evidence=? WHERE id=?",
+                  (store.now(), who["name"], f"Site visit #{vid}", due["id"]))
+    store.log(c, who["name"], _tier(who), "visit", vid, "create",
+              f"Site visit — {d['findings'].strip()[:70]}"
+              + (" · NON-COMPLIANCE RAISED" if nc else ""), project=pname)
+    return {"ok": True, "id": vid, "non_compliance": bool(nc)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DRAWINGS & TRANSMITTALS  — Manual §5
+# ══════════════════════════════════════════════════════════════════════════
+def drawing_create(c, who, d):
+    _req(d, "project_id", "number", "title")
+    pid = int(d["project_id"])
+    pname = _pname(c, pid)
+    if not pname:
+        raise Refused("No such project.")
+    c.execute("INSERT INTO drawings(project_id,number,title,discipline,revision,"
+              "status,link,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?)",
+              (pid, d["number"].strip(), d["title"].strip(),
+               d.get("discipline") or "Architecture", d.get("revision") or "A",
+               d.get("status") or "draft", (d.get("link") or "").strip(),
+               store.now(), who["name"]))
+    did = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    store.log(c, who["name"], _tier(who), "drawing", did, "create",
+              f"Registered {d['number'].strip()} Rev {d.get('revision') or 'A'} · "
+              f"{d['title'].strip()}", project=pname)
+    return {"ok": True, "id": did}
+
+
+def transmittal_issue(c, who, d):
+    """Issue a drawing set. Manual §5 makes IFC issuance a contractual milestone
+    tied to construction progress; this is the logged, auditable fact of it."""
+    _req(d, "project_id", "phase", "issued_to")
+    if _tier(who) > 1:
+        raise Refused("Only a senior manager or the department head can issue drawings.")
+    pid = int(d["project_id"])
+    pr = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not pr:
+        raise Refused("No such project.")
+    reason = (d.get("override_reason") or "").strip()
+
+    # Manual §4.1 — no issuance before the stage checklist is signed.
+    stage = {"IFC Phase I": 11, "IFC Phase II": 11, "IFC Phase III": 12,
+             "Tender": 10, "Authority": 7}.get(d["phase"], None)
+    if stage:
+        cl = c.execute("SELECT * FROM checklists WHERE project_id=? AND stage=?",
+                       (pid, stage)).fetchone()
+        if cl and not cl["signed_at"] and not reason:
+            store.log(c, who["name"], _tier(who), "transmittal", None, "issue",
+                      f"BLOCKED — {d['phase']} issuance on {pr['name']} with stage "
+                      f"{stage} checklist unsigned (§4.1)", project=pr["name"], blocked=1)
+            raise Refused("Manual §4.1: checklist sign-off is mandatory before any "
+                          "drawing issuance.", gate="checklist", overridable=True)
+
+    n = c.execute("SELECT COUNT(*) FROM transmittals").fetchone()[0]
+    ref = f"TR-{pr['code']}-{200 + n + 1}"
+    cnt = c.execute("SELECT COUNT(*) FROM drawings WHERE project_id=?", (pid,)).fetchone()[0]
+    c.execute("INSERT INTO transmittals(ref,project_id,phase,issued_to,drawing_count,"
+              "note,issued_at,issued_by) VALUES(?,?,?,?,?,?,?,?)",
+              (ref, pid, d["phase"], d["issued_to"].strip(),
+               int(d.get("drawing_count") or cnt), (d.get("note") or "").strip(),
+               store.now(), who["name"]))
+    tid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    # issuing to another department opens the clock on them
+    for lane in [x.strip() for x in d["issued_to"].split(",") if x.strip()]:
+        if store.is_stub(lane):
+            c.execute("INSERT INTO coordination(project_id,stage,from_team,to_lane,"
+                      "ask,sla_days,opened_at) VALUES(?,?,?,?,?,?,?)",
+                      (pid, stage or 13, "Architecture", lane,
+                       f"{ref} — acknowledge {d['phase']}", 3,
+                       store.today().isoformat()))
+    store.log(c, who["name"], _tier(who), "transmittal", tid,
+              "issue_override" if reason else "issue",
+              f"{ref} — {d['phase']} issued to {d['issued_to'].strip()}"
+              + (f" · OVERRIDE: {reason}" if reason else ""), project=pr["name"])
+    return {"ok": True, "ref": ref}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CHECKLISTS  — Manual §4.1 / §4.2
+# ══════════════════════════════════════════════════════════════════════════
+def checklist_add(c, who, d):
+    """§4.2's annexure is "(to be added)". So the department authors it in-system,
+    and the LLR loop (§7.6) can feed items in later."""
+    _req(d, "checklist_id", "text")
+    cid = int(d["checklist_id"])
+    cl = c.execute("SELECT * FROM checklists WHERE id=?", (cid,)).fetchone()
+    if not cl:
+        raise Refused("No such checklist.")
+    if cl["signed_at"]:
+        raise Refused("This checklist is already signed.")
+    n = c.execute("SELECT COALESCE(MAX(seq),0) FROM checklist_items WHERE checklist_id=?",
+                  (cid,)).fetchone()[0]
+    c.execute("INSERT INTO checklist_items(checklist_id,seq,text,source) VALUES(?,?,?,?)",
+              (cid, n + 1, d["text"].strip(), d.get("source") or "Authored in-system"))
+    store.log(c, who["name"], _tier(who), "checklist", cid, "add_item",
+              f"Added check: {d['text'].strip()[:70]}",
+              project=_pname(c, cl["project_id"]))
+    return {"ok": True}
+
+
+def checklist_tick(c, who, d):
+    iid = int(d.get("id") or 0)
+    it = c.execute("SELECT * FROM checklist_items WHERE id=?", (iid,)).fetchone()
+    if not it:
+        raise Refused("No such item.")
+    done = 0 if it["done"] else 1
+    c.execute("UPDATE checklist_items SET done=?,done_by=?,done_at=?,note=? WHERE id=?",
+              (done, who["name"] if done else None,
+               store.now() if done else None, (d.get("note") or "").strip(), iid))
+    return {"ok": True, "done": bool(done)}
+
+
+def checklist_sign(c, who, d):
+    cid = int(d.get("id") or 0)
+    cl = c.execute("SELECT * FROM checklists WHERE id=?", (cid,)).fetchone()
+    if not cl:
+        raise Refused("No such checklist.")
+    if _tier(who) > 2:
+        raise Refused("Only a lead or above can sign off a checklist.")
+    items = c.execute("SELECT * FROM checklist_items WHERE checklist_id=?", (cid,)).fetchall()
+    if not items:
+        raise Refused("This checklist has no items yet — §4.2's annexure has not been "
+                      "authored. Add the checks first.")
+    undone = [i for i in items if not i["done"]]
+    reason = (d.get("override_reason") or "").strip()
+    if undone and not reason:
+        store.log(c, who["name"], _tier(who), "checklist", cid, "sign",
+                  f"BLOCKED — {len(undone)} of {len(items)} checks not ticked",
+                  project=_pname(c, cl["project_id"]), blocked=1)
+        raise Refused(f"{len(undone)} of {len(items)} checks are not ticked.",
+                      gate="checklist_items", overridable=True)
+    c.execute("UPDATE checklists SET signed_at=?,signed_by=? WHERE id=?",
+              (store.now(), who["name"], cid))
+    store.log(c, who["name"], _tier(who), "checklist", cid,
+              "sign_override" if reason else "sign",
+              f"Signed stage {cl['stage']} checklist ({len(items)} checks)"
+              + (f" · OVERRIDE: {reason}" if reason else ""),
+              project=_pname(c, cl["project_id"]))
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# NOTES  — the thing that currently lives in WhatsApp
+# ══════════════════════════════════════════════════════════════════════════
+def note_add(c, who, d):
+    _req(d, "entity", "entity_id", "body")
+    c.execute("INSERT INTO notes(entity,entity_id,body,who,at) VALUES(?,?,?,?,?)",
+              (d["entity"], int(d["entity_id"]), d["body"].strip(),
+               who["name"], store.now()))
+    store.log(c, who["name"], _tier(who), d["entity"], int(d["entity_id"]), "note",
+              d["body"].strip()[:90])
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+DISPATCH = {
+    "/api/project/create":       project_create,
+    "/api/intake/save":          intake_save,
+    "/api/stage/initiate":       stage_initiate,
+    "/api/stage/signoff":        stage_signoff,
+    "/api/task/create":          task_create,
+    "/api/task/assign":          task_assign,
+    "/api/case/create":          case_create,
+    "/api/case/decide":          case_decide,
+    "/api/coordination/create":  coord_create,
+    "/api/obligation/complete":  obligation_complete,
+    "/api/visit/create":         visit_create,
+    "/api/drawing/create":       drawing_create,
+    "/api/transmittal/issue":    transmittal_issue,
+    "/api/checklist/add":        checklist_add,
+    "/api/checklist/tick":       checklist_tick,
+    "/api/checklist/sign":       checklist_sign,
+    "/api/note/add":             note_add,
+}

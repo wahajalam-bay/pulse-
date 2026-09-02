@@ -1,0 +1,531 @@
+<title>ZD PULSE Walkthrough</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+:root{
+  --paper:#F5F5F2;
+  --card:#FFFFFF;
+  --ink:#101C2E;
+  --ink-2:#42536A;
+  --ink-3:#7C8B9E;
+  --rule:#DFDDD6;
+  --rule-2:#C9C6BC;
+  --brass:#9A7430;
+  --brass-tint:#F2EADA;
+  --stop:#9B3324;
+  --stop-tint:#F7E7E3;
+  --go:#2A5A45;
+  --go-tint:#E4EEE8;
+  --sh:0 1px 2px rgba(16,28,46,.05), 0 6px 18px rgba(16,28,46,.05);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E141C;
+    --card:#161E28;
+    --ink:#E8EAE6;
+    --ink-2:#A3B0C0;
+    --ink-3:#71808F;
+    --rule:#26303C;
+    --rule-2:#38434F;
+    --brass:#D2A857;
+    --brass-tint:#251E10;
+    --stop:#DB8171;
+    --stop-tint:#2A1714;
+    --go:#7FBFA0;
+    --go-tint:#12241B;
+    --sh:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0E141C; --card:#161E28; --ink:#E8EAE6; --ink-2:#A3B0C0; --ink-3:#71808F;
+  --rule:#26303C; --rule-2:#38434F; --brass:#D2A857; --brass-tint:#251E10;
+  --stop:#DB8171; --stop-tint:#2A1714; --go:#7FBFA0; --go-tint:#12241B;
+  --sh:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Source Serif 4",Georgia,serif; font-size:16.5px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:940px; margin:0 auto; padding:56px 28px 96px}
+
+h1,h2,h3,.lbl,.beat-n,.q-n,th{font-family:Archivo,system-ui,sans-serif}
+h1{font-size:clamp(30px,4.6vw,46px); font-weight:700; letter-spacing:-.028em;
+   line-height:1.08; margin:0 0 14px; text-wrap:balance}
+h2{font-size:23px; font-weight:700; letter-spacing:-.02em; margin:0; text-wrap:balance}
+h3{font-size:16px; font-weight:600; letter-spacing:-.01em; margin:0 0 6px}
+p{margin:0 0 14px; max-width:66ch}
+p:last-child{margin-bottom:0}
+strong{font-weight:600}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace; font-size:.86em}
+a{color:var(--brass)}
+
+.lbl{font-size:10.5px; text-transform:uppercase; letter-spacing:.16em;
+     font-weight:600; color:var(--ink-3)}
+
+/* header */
+header{border-bottom:2px solid var(--ink); padding-bottom:26px; margin-bottom:8px}
+.eyebrow{display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap}
+.eyebrow .lbl{color:var(--brass)}
+.dot{width:3px;height:3px;border-radius:50%;background:var(--rule-2)}
+.lede{font-size:18px; color:var(--ink-2); max-width:60ch}
+
+/* the vitals strip */
+.vitals{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+        gap:0; border:1px solid var(--rule); border-radius:3px; overflow:hidden;
+        margin:30px 0 0; background:var(--card)}
+.vital{padding:15px 18px; border-right:1px solid var(--rule)}
+.vital:last-child{border-right:0}
+.vital .lbl{display:block; margin-bottom:5px}
+.vital .v{font-family:"JetBrains Mono",monospace; font-size:14px; font-weight:500;
+          word-break:break-all; line-height:1.45}
+@media(max-width:640px){.vital{border-right:0;border-bottom:1px solid var(--rule)}
+  .vital:last-child{border-bottom:0}}
+
+/* section headings */
+.sec{display:flex; align-items:baseline; gap:14px; margin:58px 0 22px;
+     padding-bottom:11px; border-bottom:1px solid var(--rule-2)}
+.sec .lbl{white-space:nowrap}
+
+/* pre-flight */
+.checks{list-style:none; padding:0; margin:0; display:grid; gap:9px}
+.checks li{display:flex; gap:12px; align-items:flex-start; font-size:15.5px}
+.checks .box{flex:0 0 auto; width:15px; height:15px; border:1.5px solid var(--rule-2);
+             border-radius:2px; margin-top:5px}
+
+/* demo beats */
+.beat{display:grid; grid-template-columns:64px 1fr; gap:0 22px; padding:24px 0;
+      border-bottom:1px solid var(--rule)}
+.beat:last-of-type{border-bottom:0}
+.beat-n{grid-row:1/span 9; font-size:27px; font-weight:700; color:var(--rule-2);
+        letter-spacing:-.03em; font-variant-numeric:tabular-nums; padding-top:1px}
+.beat-n small{display:block; font-size:10px; letter-spacing:.12em; font-weight:600;
+              color:var(--ink-3); margin-top:5px; text-transform:uppercase}
+.beat h3{margin-bottom:9px}
+.do{font-family:"JetBrains Mono",monospace; font-size:12.5px; line-height:1.75;
+    background:var(--card); border:1px solid var(--rule); border-left:2.5px solid var(--brass);
+    border-radius:2px; padding:11px 14px; margin:0 0 12px; color:var(--ink-2);
+    overflow-x:auto; white-space:pre-wrap}
+.say{border-left:2.5px solid var(--rule-2); padding:2px 0 2px 15px; margin:12px 0 0;
+     font-style:italic; color:var(--ink-2); max-width:62ch}
+.say b{font-style:normal; color:var(--ink); font-weight:600}
+
+/* the two hero moments */
+.moment{background:var(--card); border:1px solid var(--rule-2); border-top:3px solid var(--brass);
+        border-radius:3px; padding:24px 26px; margin:0 0 18px}
+.moment h3{font-size:17px; margin-bottom:10px}
+.refusal{font-family:"JetBrains Mono",monospace; font-size:12.5px; line-height:1.7;
+         background:var(--stop-tint); color:var(--stop); border-radius:2px;
+         padding:12px 15px; margin:14px 0; white-space:pre-wrap; overflow-x:auto}
+.pass{background:var(--go-tint); color:var(--go)}
+
+/* questions */
+.qgroup{margin-bottom:34px}
+.qgroup > .lbl{display:block; margin-bottom:4px}
+.qgroup > p.why{font-size:14.5px; color:var(--ink-2); margin:0 0 14px; max-width:62ch}
+.q{display:grid; grid-template-columns:34px 1fr; gap:0 14px; padding:13px 0;
+   border-bottom:1px solid var(--rule)}
+.q:last-child{border-bottom:0}
+.q-n{font-size:13px; font-weight:600; color:var(--brass);
+     font-variant-numeric:tabular-nums; padding-top:3px}
+.q .ask{font-weight:600; margin:0 0 4px; font-family:Archivo,sans-serif; font-size:15px;
+        letter-spacing:-.008em}
+.q .ctx{font-size:14px; color:var(--ink-2); margin:0}
+.q .ans{margin-top:9px; border-bottom:1px dashed var(--rule-2); height:19px}
+
+.flag{display:inline-block; font-family:Archivo,sans-serif; font-size:9.5px;
+      font-weight:600; letter-spacing:.1em; text-transform:uppercase;
+      padding:2px 7px; border-radius:2px; vertical-align:2px; margin-left:7px}
+.flag.stop{background:var(--stop-tint); color:var(--stop)}
+.flag.brass{background:var(--brass-tint); color:var(--brass)}
+
+/* table */
+.tw{overflow-x:auto; border:1px solid var(--rule); border-radius:3px; background:var(--card)}
+table{border-collapse:collapse; width:100%; font-size:14px; min-width:440px}
+th{text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.13em;
+   font-weight:600; color:var(--ink-3); padding:11px 15px; border-bottom:1px solid var(--rule-2)}
+td{padding:10px 15px; border-bottom:1px solid var(--rule); vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.n{font-family:"JetBrains Mono",monospace; font-variant-numeric:tabular-nums;
+     white-space:nowrap; font-size:13px}
+
+.note{background:var(--card); border:1px solid var(--rule); border-radius:3px;
+      padding:18px 21px; margin:0}
+.note.warn{background:var(--stop-tint); border-color:transparent}
+.note.warn p{color:var(--stop)}
+
+footer{margin-top:64px; padding-top:22px; border-top:2px solid var(--ink);
+       font-size:13.5px; color:var(--ink-3)}
+:focus-visible{outline:2px solid var(--brass); outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media(max-width:560px){
+  .beat{grid-template-columns:1fr} .beat-n{grid-row:auto; margin-bottom:6px}
+  .q{grid-template-columns:1fr} .q-n{margin-bottom:2px}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">
+    <span class="lbl">Session brief</span><span class="dot"></span>
+    <span class="lbl">Haroon Noon · Head of Architecture &amp; Design</span>
+  </div>
+  <h1>ZD PULSE Walkthrough</h1>
+  <p class="lede">Twenty minutes at the screen, then the twenty questions. The demo is
+  built to make six of those questions answer themselves — he will see the problem
+  before you name it.</p>
+
+  <div class="vitals">
+    <div class="vital"><span class="lbl">Open</span>
+      <span class="v">127.0.0.1:4010/zd/</span></div>
+    <div class="vital"><span class="lbl">Sign in as</span>
+      <span class="v">haroon@zameen.com</span></div>
+    <div class="vital"><span class="lbl">Password</span>
+      <span class="v">ZDesign!2026</span></div>
+    <div class="vital"><span class="lbl">Start command</span>
+      <span class="v">./start.sh</span></div>
+  </div>
+</header>
+
+<div class="sec"><span class="lbl">Before he sits down</span><h2>Four checks</h2></div>
+<ul class="checks">
+  <li><span class="box"></span><span>Server up — <code>./start.sh</code> from <code>zd-pulse/</code>, then load the URL once yourself.</span></li>
+  <li><span class="box"></span><span>Signed in as <strong>haroon@zameen.com</strong>, landing on <strong>My Queue</strong>.</span></li>
+  <li><span class="box"></span><span>Second tab open on <strong>Workflow Catalog</strong> — you will jump there for the TAT conflicts.</span></li>
+  <li><span class="box"></span><span>Have the Design Workflow Booklet open on paper or a second screen. He will want to point at it.</span></li>
+</ul>
+
+<div class="sec"><span class="lbl">≈ 20 minutes</span><h2>The demo, seven beats</h2></div>
+
+<div class="beat">
+  <div class="beat-n">1<small>1 min</small></div>
+  <div>
+    <h3>Open on My Queue, not a dashboard</h3>
+    <p class="do">Rail → My Queue (it lands here)</p>
+    <p>Five decisions waiting, twenty-nine obligations due, four unassigned steps in
+    Architecture. Every number is a button.</p>
+    <p class="say">"This isn't a report you read on Monday. This is where your team
+    starts the day — <b>everything here is something you do, not something you look at</b>."</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">2<small>3 min</small></div>
+  <div>
+    <h3>The stage matrix — the screen he'll live in</h3>
+    <p class="do">Rail → Project Stage Matrix</p>
+    <p>Eight projects down, thirteen stations across: acquisition, the ten design stages,
+    construction support. Amber cells are running, red are overdue.</p>
+    <p class="say">"Bayut Studios has 388 short projects, so a list works. You have twelve
+    running for years through gated stages. <b>The question isn't which projects exist —
+    it's which stage each one is in and whether it's late.</b> This is the master sheet,
+    except it can't go stale."</p>
+    <p>Click any cell to open that project.</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">3<small>4 min</small></div>
+  <div>
+    <h3>Open a project live — and hit the intake gate</h3>
+    <p class="do">Matrix → + Open a project
+  name: Zameen Sapphire   code: ZS2
+→ Project Insights → Stage 3 row → Initiate</p>
+    <p>It refuses, and it names every missing field:</p>
+    <div class="refusal">Intake is incomplete — Manual §3.4 makes this the initial gate.
+  · Regulatory data (bylaws, ground coverage)
+  · Land area &amp; plot size
+  · Height of building
+  · No. of basements · Inventory type
+  · Earthquake zone · MEP design / layouts</div>
+    <p class="say">"That's your own §3.1 table, field for field, each with the department
+    that owes it. Right now, 'why hasn't design started' is an argument.
+    <b>Here it's a field with a name and a date on it.</b>"</p>
+    <p class="do">Click Intake (§3.1) → fill all seven → Save
+→ Stage 3 → Initiate</p>
+    <p><strong>Forty-one tasks appear</strong>, generated from the booklet, with planned
+    dates derived from the published TAT — not typed by anyone.</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">4<small>4 min</small></div>
+  <div>
+    <h3>Raise a MAR — watch it route itself, then get blocked</h3>
+    <p class="do">+ Raise a case → type MAR
+  title: Façade stone cladding
+  value: 2100000</p>
+    <p>The reference comes back as <code>MAR-ZS2-104</code> with <strong>CEO Office
+    approval required</strong> — it read PKR 2.1m against the Supply Chain Manual's own
+    thresholds and routed itself.</p>
+    <p class="do">Approvals Inbox → find a case sitting with PM
+→ Try to decide</p>
+    <div class="refusal">This lane belongs to PM — outside Arch &amp; Design.
+Logged as an external wait. Waiting 24 working days so far.</div>
+    <p class="say">"Every case carries all its lanes. Yours is live. PM, QA/QC and Supply
+    Chain hold the clock but nobody can action them yet — because their systems don't exist.
+    <b>When they do, that greyed lane switches on and nothing else changes.</b>
+    Meanwhile it's counting."</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">5<small>3 min</small></div>
+  <div>
+    <h3>The number nobody in ZD can produce</h3>
+    <p class="do">Rail → Executive Summary, then Coordination Ledger</p>
+    <p><strong>3,236 days — 23.7% of all elapsed time</strong> — booked against parties
+    outside the department. Eighteen open asks, six already past their own SLA.</p>
+    <p class="say">"Every task carries two clocks, split at the handoff. Own time and wait
+    time. <b>Your SLA is measured on own time only</b> — waiting eight weeks on a geotech
+    vendor never counts against Structure. And the wait side becomes the ledger of who
+    owes you what."</p>
+    <p class="say">This is the slide that funds the PM system. Let it sit.</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">6<small>3 min</small></div>
+  <div>
+    <h3>The catalog — his booklet, running</h3>
+    <p class="do">Rail → Workflow Catalog</p>
+    <p>Thirty-nine workflows, 296 steps, 46 rework loops, 10 gates. Maker and checker
+    marks. External lanes flagged. Then the banner at the top:</p>
+    <div class="refusal">6 TAT conflicts between the Booklet and the Guidelines Manual §4.0.</div>
+    <p class="say">"Both numbers are stored. I haven't picked a winner, because
+    <b>an SLA nobody agrees on is worse than no SLA.</b> Design Schematics is 8–9 weeks
+    in your booklet and 4–6 in the Manual — same flowchart, same steps."</p>
+    <p>This is where questions 1 and 2 stop being abstract. Have the booklet ready.</p>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="beat-n">7<small>2 min</small></div>
+  <div>
+    <h3>Every action, and every refusal</h3>
+    <p class="do">Rail → Activity Ledger</p>
+    <p>Append-only. Who acted, <strong>what authority they acted with</strong>, and the
+    blocked attempts highlighted.</p>
+    <p class="say">"You asked to keep an eye on each action. This is it — including the
+    ones that were refused. <b>How often were we stopped waiting on PM last quarter</b>
+    is currently unanswerable. Here it's a filter."</p>
+  </div>
+</div>
+
+<div class="sec"><span class="lbl">If you only land two things</span><h2>The moments that sell it</h2></div>
+
+<div class="moment">
+  <h3>The intake gate <span class="flag brass">Beat 3</span></h3>
+  <p>It solves a political problem, not a technical one. Everyone in that room has argued
+  about why a project hasn't started. Thirty seconds after he sees seven named fields with
+  seven named owners, that argument is over.</p>
+</div>
+
+<div class="moment">
+  <h3>The blocked lane <span class="flag brass">Beat 4</span></h3>
+  <p>It is the entire ZD Universe strategy in one click. Build the whole pipe, light one
+  segment at a time — and the segments still dark are busy generating the business case
+  for lighting them.</p>
+</div>
+
+<div class="sec"><span class="lbl">Be first to say it</span><h2>What isn't built</h2></div>
+<div class="note">
+  <p>Don't let him find these. Name them before he does — it buys credibility for
+  everything you did build.</p>
+  <p style="margin-top:12px"><strong>Eleven of the Manual's eighteen sections are live.</strong>
+  Not built: §8 Value Engineering · §10 BOQ endorsement · §12 finishing items &amp; sampling ·
+  §16 QA/QC · §17 regulatory visits · §18 closeout and as-built. No notifications, no
+  search, no file upload, no LLR library.</p>
+  <p style="margin-top:12px">Also say plainly: <strong>task progress is demo data.</strong>
+  The catalog, the spine, the routes, the thresholds, the people and the conflicts are all
+  real. The dates are not.</p>
+</div>
+
+<div class="sec"><span class="lbl">Twenty questions</span><h2>What you need from him</h2></div>
+
+<div class="qgroup">
+  <span class="lbl">Group A — blocking</span>
+  <p class="why">Nothing SLA-shaped can be defended until these two are settled. Get them
+  in the room, in writing, today.</p>
+
+  <div class="q"><div class="q-n">01</div><div>
+    <p class="ask">Which document is canonical on TAT — the Booklet or the Manual?
+      <span class="flag stop">Blocking</span></p>
+    <p class="ctx">They disagree on 6 of 10 architecture stages, and the Manual contradicts
+    its own flowcharts on stages 5, 11 and 12. One switch in the code applies his ruling.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">02</div><div>
+    <p class="ask">Is a "day" a working day or a calendar day — and does TAT include waiting
+      on outsiders? <span class="flag stop">Blocking</span></p>
+    <p class="ctx">No document states it. Built assuming working days, Mon–Fri, excluding
+    external wait. If he says otherwise it's one function.</p>
+    <div class="ans"></div></div></div>
+</div>
+
+<div class="qgroup">
+  <span class="lbl">Group B — scope</span>
+  <p class="why">Each of these changes what the system covers, and two of them are schema
+  decisions rather than preferences.</p>
+
+  <div class="q"><div class="q-n">03</div><div>
+    <p class="ask">Is Creative in or out?</p>
+    <p class="ctx">Seven of Creative's twelve workflows have no project to attach to.
+    Currently parked on a "Department BAU" carrier — that's a placeholder, not an answer.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">04</div><div>
+    <p class="ask">Does the spine cover acquisition and construction support, or just
+      stages 3–12?</p>
+    <p class="ctx">His Manual's matrix stops at 12, but §3 and §§5–18 are clearly his
+    department, and construction support runs for years.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">05</div><div>
+    <p class="ask">Is there a Volume 2 of the Workflow Booklet?</p>
+    <p class="ctx">Vol. 1 is labelled as such. Ahmed's session was described as incomplete.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">06</div><div>
+    <p class="ask">Who writes the §4.2 Internal Checklist Annexure, and by when?</p>
+    <p class="ctx">It's mandatory at every stage and required before any drawing issuance —
+    and it says "(to be added)". The engine is built and ships empty; his team authors the
+    checks in-system.</p>
+    <div class="ans"></div></div></div>
+</div>
+
+<div class="qgroup">
+  <span class="lbl">Group C — how it should behave</span>
+  <p class="why">Confirm the calls already made. If he disagrees, better now than after
+  forty people are using it.</p>
+
+  <div class="q"><div class="q-n">07</div><div>
+    <p class="ask">Hard gates or soft gates?</p>
+    <p class="ctx">Built soft — every refusal offers "Override &amp; proceed" with a
+    mandatory reason that lands in the ledger. A hard block just pushes work back to paper.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">08</div><div>
+    <p class="ask">Files — stored in the system, or a register that links to the drive?</p>
+    <p class="ctx">Built as register + link. Becoming a document management system is a
+    different product.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">09</div><div>
+    <p class="ask">Who outside the 44 needs access — contractors, consultants, the Authority?</p>
+    <p class="ctx">Portal accounts, or internal-only with their side logged manually?</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">10</div><div>
+    <p class="ask">Do site visits need to work on a phone?</p>
+    <p class="ctx">§15 mandates monthly visits with photos. Currently desk entry.</p>
+    <div class="ans"></div></div></div>
+</div>
+
+<div class="qgroup">
+  <span class="lbl">Group D — people and data</span>
+  <p class="why">Cheap to answer, and each one unblocks something concrete.</p>
+
+  <div class="q"><div class="q-n">11</div><div>
+    <p class="ask">Name the approval authorities.</p>
+    <p class="ctx">Head ZD, Director Design, Director Projects, Audit head, SCM head,
+    CPC members. Real names to real accounts.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">12</div><div>
+    <p class="ask">What are the other four projects?</p>
+    <p class="ctx">The booklet says twelve on-ground; the cover names eight. The rest
+    weren't invented.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">13</div><div>
+    <p class="ask">Should we start from Zergham's partial ZD build, or fork clean?</p>
+    <p class="ctx">Khurram's email said he'd share it. Still unseen.</p>
+    <div class="ans"></div></div></div>
+</div>
+
+<div class="qgroup">
+  <span class="lbl">Group E — the universe</span>
+  <p class="why">These reach past his department. If the right people aren't in the room,
+  find out who is and get the meeting.</p>
+
+  <div class="q"><div class="q-n">14</div><div>
+    <p class="ask">SAGE — can we get API or database access?
+      <span class="flag stop">Program-shaping</span></p>
+    <p class="ctx">The single biggest unknown. Stores and Procurement are built on it.
+    If the answer is no, phases 5–6 become manual double-entry.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">15</div><div>
+    <p class="ask">Primavera — import milestones, or schedule inside the system?</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">16</div><div>
+    <p class="ask">Does anything called "ZD Universe" already exist?</p>
+    <p class="ctx">PM Manual §8.2.1 mandates it as if it does — "the primary central hub…
+    single source of truth". Partial build, a Drive folder, or purely aspirational?</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">17</div><div>
+    <p class="ask">Who arbitrates when two manuals contradict each other?</p>
+    <p class="ctx">MAR means three different things across three manuals. CFT means two.
+    There are two separate LLR processes. There will be more.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">18</div><div>
+    <p class="ask">Should the CPC queue move into the system?</p>
+    <p class="ctx">Thursdays, every department, everything over PKR 500,000. Probably the
+    single biggest quick win available across the whole universe.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">19</div><div>
+    <p class="ask">Does Audit get read access across all four departments?</p>
+    <p class="ctx">They appear as a control in every one of the four manuals.</p>
+    <div class="ans"></div></div></div>
+
+  <div class="q"><div class="q-n">20</div><div>
+    <p class="ask">One platform with four departments on it — or four separate systems?
+      <span class="flag stop">Decides everything</span></p>
+    <p class="ctx">The shared case engine, the two clocks, value routing, the CPC queue and
+    the cross-department ledger all evaporate if MAR gets built three times in three
+    codebases. His own PM Manual §8.2.1 is the argument for one.</p>
+    <div class="ans"></div></div></div>
+</div>
+
+<div class="sec"><span class="lbl">Reference</span><h2>The six TAT conflicts</h2></div>
+<p>Keep this to hand — question 1 will turn into a line-by-line argument, and it should.</p>
+<div class="tw">
+<table>
+  <thead><tr><th>Stage</th><th>Workflow</th><th>Booklet</th><th>Manual §4.0</th></tr></thead>
+  <tbody>
+    <tr><td class="n">3</td><td>Design Schematics</td><td class="n">8–9 wk</td><td class="n">4–6 wk</td></tr>
+    <tr><td class="n">5</td><td>Design Development</td><td class="n">9 wk</td><td class="n">8–10 wk</td></tr>
+    <tr><td class="n">8</td><td>Mood Board</td><td class="n">1 wk</td><td class="n">1–2 wk</td></tr>
+    <tr><td class="n">10</td><td>Tender Drawings</td><td class="n">8 wk</td><td class="n">8–9 wk</td></tr>
+    <tr><td class="n">11</td><td>IFC Phase I &amp; II</td><td class="n">9–10 wk</td><td class="n">11–12 wk</td></tr>
+    <tr><td class="n">12</td><td>IFC Phase III</td><td class="n">16 wk</td><td class="n">12–14 wk</td></tr>
+  </tbody>
+</table>
+</div>
+<p style="margin-top:14px; font-size:14.5px; color:var(--ink-2)">The Manual also disagrees
+with its own embedded flowcharts on stages 5, 11 and 12 — so on those three there are
+<em>three</em> published numbers, not two.</p>
+
+<div class="sec"><span class="lbl">Close</span><h2>Ask for one thing</h2></div>
+<div class="note">
+  <p>Don't leave with a list of maybes. Leave with <strong>a date for Ahmed to rule on
+  question 1</strong> — the TAT authority. It is the only thing genuinely blocking, it
+  takes fifteen minutes of his time, and every SLA number in the system stays
+  undefendable until it happens.</p>
+  <p style="margin-top:12px">Everything else can be answered over the following week.</p>
+</div>
+
+<footer>
+  ZD PULSE · Architecture &amp; Design · review build 27 August 2026 ·
+  39 workflows · 296 steps · 17 write actions · 13 rails
+</footer>
+
+</div>
